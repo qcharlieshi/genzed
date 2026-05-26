@@ -1,5 +1,11 @@
-*~
 node_modules
-client/dist/bundle.js
-client/dist/bundle.js.map
-
+dist
+.DS_Store
+*.log
+.env
+.env.local
+.vite
+coverage
+playwright-report
+test-results
+.fly
