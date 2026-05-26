@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 import appConfig from "../appConfig.js";
-import { type ArenaState, Player } from "../schema/ArenaState.js";
+import { type ArenaState, type Player } from "../schema/ArenaState.js";
 
 let colyseus: ColyseusTestServer;
 

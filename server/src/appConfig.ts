@@ -1,4 +1,4 @@
-import { type ConfigOptions, listen } from "@colyseus/tools";
+import { type ConfigOptions } from "@colyseus/tools";
 import { type Server } from "@colyseus/core";
 import { type Express } from "express";
 import { ROOM_NAME } from "@genzed/shared";
@@ -15,5 +15,4 @@ const appConfig: ConfigOptions = {
   },
 };
 
-export { listen };
 export default appConfig;
