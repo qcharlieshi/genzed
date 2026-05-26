@@ -27,6 +27,12 @@ importers:
         specifier: 5.5.4
         version: 5.5.4
 
+  shared:
+    devDependencies:
+      typescript:
+        specifier: 5.5.4
+        version: 5.5.4
+
 packages:
 
   '@eslint-community/eslint-utils@4.9.1':
