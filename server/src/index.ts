@@ -1,4 +1,3 @@
-/* global process */
 import { listen } from "@colyseus/tools";
 import appConfig from "./appConfig.js";
 

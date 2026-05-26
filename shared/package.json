@@ -13,6 +13,7 @@
     }
   },
   "scripts": {
+    "prepare": "tsc",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "echo 'no tests yet'"

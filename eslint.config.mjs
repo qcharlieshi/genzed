@@ -13,6 +13,21 @@ const browserGlobals = {
   JSX: "readonly",
 };
 
+const nodeGlobals = {
+  process: "readonly",
+  __dirname: "readonly",
+  __filename: "readonly",
+  console: "readonly",
+  Buffer: "readonly",
+  setTimeout: "readonly",
+  clearTimeout: "readonly",
+  setInterval: "readonly",
+  clearInterval: "readonly",
+  setImmediate: "readonly",
+  clearImmediate: "readonly",
+  global: "readonly",
+};
+
 export default [
   {
     ignores: ["**/dist/**", "**/node_modules/**", "legacy/**", "**/*.tsbuildinfo"],
@@ -48,6 +63,19 @@ export default [
     rules: {
       // console.error is used intentionally in GameMount catch block.
       "no-console": ["warn", { allow: ["warn", "error"] }],
+    },
+  },
+  {
+    // Node environment for server source and root-level config files.
+    files: [
+      "server/**/*.{ts,tsx}",
+      "shared/**/*.{ts,tsx}",
+      "*.config.{ts,mjs,js}",
+      "playwright.config.ts",
+      "tests/**/*.{ts,tsx}",
+    ],
+    languageOptions: {
+      globals: nodeGlobals,
     },
   },
 ];
