@@ -29,7 +29,7 @@ export function GameMount(): JSX.Element {
         scene.setStatus(`connected: ${room.sessionId}`);
       })
       .catch((err: unknown) => {
-        // eslint-disable-next-line no-console
+        if (cancelled) return;
         console.error(err);
         scene.setStatus("connection failed");
       });
