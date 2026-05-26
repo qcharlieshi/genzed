@@ -13,11 +13,13 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "pnpm -r run test",
+    "test:e2e": "playwright test",
     "start": "node server/dist/index.js"
   },
   "devDependencies": {
     "typescript": "5.5.4",
     "@types/node": "20.14.10",
+    "@playwright/test": "1.46.0",
     "eslint": "9.9.0",
     "@eslint/js": "9.9.0",
     "@typescript-eslint/parser": "8.0.0",
