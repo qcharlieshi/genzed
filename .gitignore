@@ -9,3 +9,7 @@ coverage
 playwright-report
 test-results
 .fly
+
+# TypeScript incremental build artifacts
+*.tsbuildinfo
+**/*.tsbuildinfo
