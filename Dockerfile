@@ -10,7 +10,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY shared/package.json shared/
 COPY client/package.json client/
 COPY server/package.json server/
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts: shared's `prepare: tsc` cannot run yet (no source copied).
+# Builds are run explicitly below after source lands.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 COPY shared shared
 COPY client client
