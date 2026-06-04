@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+legacy
+docs
+.idea
+.DS_Store
+playwright-report
+test-results
+*.log

@@ -1,53 +1,54 @@
-Zombiez was initiated with code from @Crizzooo's platformerbattle
+# Genzed
 
+Multiplayer top-down battle arena. Modernized 2026 rewrite of a 2017 capstone project (Phaser 2 + socket.io). Original code preserved under `legacy/`.
 
+**Live:** https://genzed.fly.dev
 
-## Table of Contents
+## Stack
 
-- [Folder Structure](#folder-structure)
+- **Client:** Phaser 3, React 18, Vite, TypeScript
+- **Server:** Node 20, Colyseus, Express, TypeScript
+- **Deploy:** Fly.io (single container, server-authoritative)
 
-## Folder Structure
+## Development
 
-The basic structure is that players join lobbies, which results in teh creation of player objects that hold a score and name.
+Requires Node 20 and pnpm 9 (use `mise` to manage via `.tool-versions`).
 
-When there is at least 1 player, the Play Game! button can be clicked, and the Phaser game is initiated with an array of the player objects.
-
-Every 'tick', updates are sent to the server and then dispatched back out. We will need to think about netcode strategies to hold all our game instances in sync for players.
-
-Our Project looks like the below diagram:
-```
-my-app/
-  README.md
-  node_modules/
-  package.json
-
-  client/         
-    components/     <-- React components
-    containers/     <-- containers to hold props for react        
-                        components
-    gameStates/      <-- Holds all game states for Phaser
-                        will need a preload, a boot, and a game at the minimum
-    prefabs/        <-- This is where we create 'classes' for
-                        enemies/objects we will use in our phaser game and initiate with sprites!
-    reducers/       <-- This is where we will create client
-                        reducers to validate and determine game states from the server
-
-  assets/           <-- All Game assets go in here
-    index.html      <-- loads our needed scripts and initiates
-                      global namespace variables
-    favicon.ico
-
-  server/
-    index.js        <--- We will probably need to implement server
-                         reducers in here
-  phaser.min.js
+```bash
+pnpm install
+pnpm dev          # client on :5173, server on :2567
+pnpm test         # all packages
+pnpm typecheck
+pnpm lint
+pnpm build        # production bundle
+pnpm test:e2e     # Playwright smoke
 ```
 
-For the project to build, **these files must exist with exact filenames**:
+After `pnpm build`, you can run the production server locally:
 
-* `public/index.html` is the page template;
-* `src/index.js` is the JavaScript Webpack entry point.
+```bash
+PORT=8080 node server/dist/index.js
+```
 
+and open `http://localhost:8080`.
 
-You may create subdirectories inside `src`. For faster rebuilds, only files inside `src` are processed by Webpack.<br>
-You need to **put any JS and CSS files inside `src`**, or Webpack won’t see them.
+## Deploy
+
+`master` pushes auto-deploy to Fly.io via GitHub Actions (requires `FLY_API_TOKEN` repo secret). For manual deploy:
+
+```bash
+fly deploy
+```
+
+App runs as a single shared-cpu-1x machine in `sjc`. The Colyseus server also serves the built client bundle on the same port — TLS terminates at Fly's proxy.
+
+## Project structure
+
+- `client/` — Phaser 3 + React 18 + Vite
+- `server/` — Colyseus + Express on Node 20
+- `shared/` — types and constants used by both
+- `legacy/` — original 2017 code (read-only reference)
+- `docs/PROGRESS.md` — living progress tracker
+- `docs/superpowers/specs/` — design docs
+- `docs/superpowers/plans/` — implementation plans
+- `CLAUDE.md` — guidance for Claude Code sessions

@@ -1,5 +1,18 @@
-*~
 node_modules
-client/dist/bundle.js
-client/dist/bundle.js.map
+dist
+.DS_Store
+.idea/
+*.log
+.env
+.env.local
+.vite
+coverage
+playwright-report
+test-results
+.fly
 
+# TypeScript incremental build artifacts
+*.tsbuildinfo
+**/*.tsbuildinfo
+dist-node
+.playwright-mcp/
