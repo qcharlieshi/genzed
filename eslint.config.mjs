@@ -11,6 +11,10 @@ const browserGlobals = {
   HTMLDivElement: "readonly",
   HTMLElement: "readonly",
   JSX: "readonly",
+  setTimeout: "readonly",
+  clearTimeout: "readonly",
+  setInterval: "readonly",
+  clearInterval: "readonly",
 };
 
 const nodeGlobals = {

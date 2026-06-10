@@ -4,6 +4,8 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 
 - **Design spec:** [docs/superpowers/specs/2026-05-25-genzed-modernization-design.md](superpowers/specs/2026-05-25-genzed-modernization-design.md)
 - **Stage 1 plan:** [docs/superpowers/plans/2026-05-25-stage1-foundation.md](superpowers/plans/2026-05-25-stage1-foundation.md)
+- **Stage 2 spec:** [docs/superpowers/specs/2026-06-04-stage2-lobby-design.md](superpowers/specs/2026-06-04-stage2-lobby-design.md)
+- **Stage 2 plan:** [docs/superpowers/plans/2026-06-04-stage2-lobby.md](superpowers/plans/2026-06-04-stage2-lobby.md)
 
 ## Direction (settled during brainstorming)
 
@@ -22,7 +24,7 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | Stage | Scope | Status |
 | --- | --- | --- |
 | **1. Foundation** | Monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world | ✅ Shipped — live at https://genzed.fly.dev |
-| **2. Lobby + room lifecycle** | Name entry, ready states, phase transitions, 2-player minimum, reconnection | ⬜ Not started |
+| **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | 🟡 In PR — branch `stage-2-lobby` |
 | **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ⬜ Not started |
 | **4. Combat** | Weapons, bullets, zombies, damage, pickups, scoring (port tuning from `legacy/`) | ⬜ Not started |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
@@ -79,9 +81,33 @@ Branch `stage-1-foundation`, 20 commits, PR #1 against `master`.
 - **`@genzed/shared` resolution.** Source-first exports (`./src/index.ts`) work for Vite/tsx but the compiled Node server can't load `.ts` — switched shared to `dist`-first exports and added a `prepare` script so `pnpm install` builds `shared/dist/` on a fresh clone.
 - **Docker incremental-build cache.** A stale `tsconfig.tsbuildinfo` copied into the build context made `tsc` (composite) skip emit, so `shared/dist/` was never produced. Fixed by adding `**/*.tsbuildinfo` to `.dockerignore` and sequencing the package builds (shared → server → client).
 
-## Known sharp edges for Stage 2
+## Stage 2 — what shipped
 
-- **`ArenaRoom.onLeave`** deletes the player immediately. Stage 2 should use `allowReconnection()` + a grace period so a page refresh doesn't drop someone from the lobby.
+Branch `stage-2-lobby`. Adds:
+
+- Server-authoritative phase FSM (`lobby → starting → playing → lobby`) on `ArenaRoom`.
+- `onAuth` gates joins (4001 if a game is in progress, 4003 if the lobby is full at 4 players).
+- 10-second reconnection grace via `allowReconnection`.
+- React lobby views (`NameEntry`, `Lobby`, `CountdownOverlay`, `ReconnectingBanner`) styled with Tailwind CSS 3.
+- Phaser scene swap: `HelloScene` removed, `ArenaScene` renders one label per player driven by Colyseus state.
+- Two-context Playwright smoke covering the full join → start → arena flow.
+
+## Verification (Stage 2)
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | ✅ clean across all packages |
+| `pnpm lint` | ✅ clean |
+| `pnpm test` | ✅ 10 server tests (FSM + reconnection + healthz) |
+| `pnpm test:e2e` | ✅ two-context smoke (~5s) |
+| `pnpm dev` (browser) | ✅ join → countdown → arena — `docs/stage2-evidence/stage2-{01,02,03}-*.png` |
+| `pnpm build` + prod server (browser) | ✅ same on one port — `docs/stage2-evidence/stage2-04-prod-arena.png` |
+| `docker build` + `docker run` | ✅ same in container — `docs/stage2-evidence/stage2-05-docker-arena.png` |
+
+## Known sharp edges for Stage 3
+
+- **`ArenaScene` is a placeholder** — text labels only. Stage 3 replaces with sprites and a Tiled tilemap.
+- **No spawn positions** — Stage 3 introduces server-chosen spawn coordinates.
+- **Real `end_game` trigger isn't wired** — Stage 4 wires it to win conditions; for now only the dev message handler exists.
 - **`fly.toml` `min_machines_running = 0`** + `auto_stop_machines` will kill in-flight games. Bump to `1` once there's real session state.
 - **Client/server Colyseus version skew** (`colyseus.js@0.15.26` vs server `@0.15.57`) — both resolve `@colyseus/schema@2.0.37` so the wire protocol matches today, but align before wire-protocol work in Stage 3.
-- **`game.scene.start()` called synchronously** after `new Phaser.Game()` relies on implicit queueing; switch to the `ready` event when the scene lifecycle becomes real.

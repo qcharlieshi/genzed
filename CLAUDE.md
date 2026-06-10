@@ -24,7 +24,7 @@ Live: https://genzed.fly.dev
 The project is decomposed into 5 stages. Each gets its own spec → plan → build cycle.
 
 1. ✅ **Foundation** — monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world (live now)
-2. ⬜ **Lobby + room lifecycle** — name entry, ready states, phase transitions, 2-player minimum, reconnection
+2. ✅ **Lobby + room lifecycle** — name entry, host-starts, phase FSM, 10s reconnection grace, placeholder arena scene
 3. ⬜ **Movement + rendering** — Tiled map load, server-authoritative movement, client prediction + interpolation
 4. ⬜ **Combat** — weapons, bullets, zombies, damage, pickups, scoring (port tuning from `legacy/`)
 5. ⬜ **Polish + playtest** — tune feel, fix prediction snap, side-by-side parity with the original
@@ -90,10 +90,13 @@ When recovering rules from `legacy/`:
 
 ## Known sharp edges
 
-- `ArenaRoom.onLeave` deletes the player immediately. Stage 2 must add `allowReconnection()` so a page refresh doesn't drop someone from the lobby.
+- `ArenaScene` is a placeholder — text labels only. Stage 3 replaces with sprites and a Tiled tilemap.
+- No spawn positions yet — Stage 3 introduces server-chosen spawn coordinates.
+- Real `end_game` trigger isn't wired — only the dev message handler exists; Stage 4 wires it to win conditions.
 - `fly.toml` has `min_machines_running = 0` + `auto_stop_machines = "stop"`. Bump `min_machines_running = 1` once there's real session state — currently fine because there isn't.
 - Vite output has one ~1.7 MB JS chunk (Phaser is heavy). Don't worry about it for now; code-split when stage 3+ pulls in more.
 - `tsc -b --noEmit` requires TS 5.6+. We're on 5.5.4 so `typecheck` is `tsc --noEmit` per-package. Bump TS when there's a reason.
+- Client/server Colyseus version skew (`colyseus.js@0.15.26` vs server `@0.15.57`) — both resolve `@colyseus/schema@2.0.37` today, but align before wire-protocol work in Stage 3.
 
 ## When in doubt
 

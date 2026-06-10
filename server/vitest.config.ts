@@ -5,5 +5,11 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     pool: "vmThreads",
+    poolOptions: {
+      vmThreads: {
+        singleThread: true,
+      },
+    },
+    testTimeout: 20_000,
   },
 });
