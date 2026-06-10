@@ -20,6 +20,7 @@ export type ArenaRoomHook = {
   sessionId: string | null;
   reconnectSecondsLeft: number;
   error: RoomError | null;
+  getRoom(): Room<ArenaState> | null;
   join(name: string): Promise<void>;
   leave(): void;
   start(): void;
@@ -181,6 +182,7 @@ export function useArenaRoom(): ArenaRoomHook {
     sessionId,
     error,
     reconnectSecondsLeft,
+    getRoom: () => roomRef.current,
     join,
     leave,
     start,
