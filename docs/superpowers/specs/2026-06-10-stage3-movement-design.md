@@ -38,7 +38,8 @@ This is the first stage with a real netcode loop. Everything combat-related stay
 - **Walk speed:** `player.stats.movement = 100` px/s (`legacy/client/src/prefabs/player.js`). Diagonal × 0.7071 (`zgsHelpers/handlePlayerInput.js`). The `movement + 100` variants are the roll — deferred.
 - **Spawn points:** 8 fixed, from `player.js`:
   `(128,128) (992,128) (384,416) (736,416) (224,704) (896,704) (96,992) (992,992)`
-- **Player art:** texture atlas `images/playerRolls.png` + `playerRolls.json` (Phaser 2 `atlasJSONHash`). Animations referenced frames by numeric index: right `[44,8,5,31,12,13]`, left `[17,10,5,19,8,9]`, up `[16,0,14,6,1]`, down `[43,9,34,38,7,4]`, idle `[18]`, at 10 fps.
+  **Deviation:** legacy `(896,704)` overlaps a wall under our centered 16×20 AABB (legacy survived it via Phaser 2 arcade de-penetration, which the pure sweep doesn't do) — Stage 3 ships it nudged to `(912,704)`. Verified: with the nudge, no spawn overlaps and walking up is clear ≥22 px from every spawn.
+- **Player art:** texture atlas `images/playerRolls.png` + `playerRolls.json` (Phaser 2 `atlasJSONHash`, 47 frames, ~16×20 px each, rendered **unscaled** with `smoothed = false`). Animations referenced frames by numeric index: right `[44,8,5,31,12,13]`, left `[17,10,5,19,8,9]`, up `[16,0,14,6,1]`, down `[43,9,34,38,7,4]`, idle `[18]`, at 10 fps. Legacy also set `scale.x = -1` while moving left (`handlePlayerInput.js:146`) — port as `flipX` and verify visually.
 - **Tilesets:** `images/mapTiles/dungeon_tileset_32.png`, `images/mapTiles/objects_tilset_32.png` (typo is in the real filename).
 
 ## Architecture
@@ -88,13 +89,14 @@ export const TILE_SIZE = 32;
 export const MAP_TILES = 35;
 export const PLAYER_SPEED = 100;      // px/s, legacy stats.movement
 export const DIAGONAL_FACTOR = 0.7071;
-export const PLAYER_SIZE = 32;        // collision AABB, refine vs atlas if needed
+export const PLAYER_W = 16;           // collision AABB = native atlas frame size
+export const PLAYER_H = 20;           // (legacy rendered unscaled, smoothed=false)
 export const RECONCILE_SNAP_PX = 64;  // drift above → hard snap, below → lerp
 export const INTERP_BUFFER_MS = 100;
 export const SPAWN_POINTS = [
   { x: 128, y: 128 }, { x: 992, y: 128 },
   { x: 384, y: 416 }, { x: 736, y: 416 },
-  { x: 224, y: 704 }, { x: 896, y: 704 },
+  { x: 224, y: 704 }, { x: 912, y: 704 }, // 912 = legacy 896 nudged out of a wall
   { x: 96,  y: 992 }, { x: 992, y: 992 },
 ] as const;
 ```
@@ -119,7 +121,7 @@ export type MoveInput = { up: boolean; down: boolean; left: boolean; right: bool
 // Velocity from held keys: PLAYER_SPEED, × DIAGONAL_FACTOR when two axes held.
 export function velocityFromInput(input: MoveInput): { vx: number; vy: number };
 
-// Axis-separated AABB sweep of a PLAYER_SIZE box against the grid + world bounds.
+// Axis-separated AABB sweep of a PLAYER_W×PLAYER_H box against the grid + world bounds.
 // Move X then Y → wall sliding for free, like Phaser arcade. At 100 px/s × 50 ms
 // = 5 px/tick vs 32 px tiles, tunneling is impossible.
 export function move(grid: SolidityGrid, x: number, y: number, dxPx: number, dyPx: number): { x: number; y: number };

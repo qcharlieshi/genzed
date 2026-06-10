@@ -17,7 +17,9 @@
 ## Critical context for implementers
 
 - **`@genzed/shared` exports compiled `dist`, not source.** After ANY edit under `shared/src/`, run `pnpm --filter @genzed/shared build` or the server/tests will resolve stale code. Every task below bakes this into its steps — do not skip it.
-- **Verified map facts** (already computed from `legacy/client/assets/maps/main.json`, do not re-derive): 35×35 tiles of 32 px → 1120×1120 world. Collision layers (`properties.collision === "true"`, string): `wallCollision`, `waterCollision` (empty), `litWallCollision`. Union solid count = **411**. Tile (0,0) is solid (map is wall-ringed); tile (1,2) is open floor. All 8 spawn tiles are open. **The tile directly above every spawn is open** (the only direction with that property — movement tests walk up).
+- **Verified map facts** (already computed from `legacy/client/assets/maps/main.json`, do not re-derive): 35×35 tiles of 32 px → 1120×1120 world. Collision layers (`properties.collision === "true"`, string): `wallCollision`, `waterCollision` (empty), `litWallCollision`. Union solid count = **411**. Tile (0,0) is solid (map is wall-ringed); tile (1,2) is open floor.
+- **Spawn geometry** (verified with the exact sweep math in this plan): legacy spawn coordinates are multiples of 32, so the 16×20 centered AABB straddles 2 tile columns × 2 rows at every spawn. Legacy's `(896, 704)` overlaps solid tiles `(27,21)`/`(27,22)` under that convention (legacy got away with it because Phaser 2 arcade physics de-penetrated; our pure sweep does not) — this plan ships it **nudged to `(912, 704)`**, which sits cleanly in column 28. With that nudge, no spawn overlaps a wall and **walking up is clear ≥22 px from every spawn** — movement tests walk up; left/right/down are walled somewhere.
+- **`noUncheckedIndexedAccess` is ON** (tsconfig.base.json, inherited everywhere). Indexed reads (`arr[i]`, including `Uint8Array`) type as `T | undefined`. The code blocks below are written index-safe — keep them that way or typecheck fails.
 - **Atlas facts:** `playerRolls.json` is a hash-format atlas, 47 frames, ~16×20 px each, rendered **unscaled** in legacy (`smoothed = false`). Frame-name animation tables are baked into Task 9 — they were extracted from the legacy numeric indices; do not re-derive them.
 - **Old Tiled JSON format:** layer `properties` is a plain object (`{"collision": "true"}`), NOT the newer array-of-objects format. The value is the **string** `"true"`.
 - Tests live in `server/src/__tests__/` only (client has no unit-test harness; prototype tier). Run a single file with `pnpm -C server exec vitest run src/__tests__/<file>.test.ts`.
@@ -35,12 +37,14 @@
 | `shared/src/move.ts` | Create | Velocity + AABB sweep + tick step (the one true movement sim) |
 | `shared/src/index.ts` | Modify | Export new modules |
 | `server/src/schema/ArenaState.ts` | Modify | Player movement fields |
-| `server/src/sim/mapData.ts` | Create | Load map JSON from disk, cache grid |
+| `server/src/sim/collision.ts` | Create | Load map JSON from disk, cache grid |
 | `server/src/rooms/ArenaRoom.ts` | Modify | Input queues, tick loop, spawn assignment |
 | `server/src/__tests__/grid.test.ts` | Create | Grid building vs the real map |
 | `server/src/__tests__/move.test.ts` | Create | Sweep math on synthetic grids |
 | `server/src/__tests__/arenaMovement.test.ts` | Create | Room-level movement integration |
+| `eslint.config.mjs` | Modify | Add `performance`/`URL`/`window` globals the new code needs |
 | `client/src/lobby/arenaState.ts` | Modify | Mirror new Player fields |
+| `client/src/lobby/useArenaRoom.ts` | Modify | Store live schema refs instead of 3-field literals |
 | `client/src/game/animations.ts` | Create | Atlas frame tables + anim registration |
 | `client/src/game/net/prediction.ts` | Create | Pending-input buffer + reconcile |
 | `client/src/game/net/interpolation.ts` | Create | Remote snapshot buffer + sampling |
@@ -98,8 +102,9 @@ git commit -m "feat(client): copy legacy arena map, tilesets, and player atlas v
 // Gameplay constants ported from legacy (see Stage 3 spec "Verified legacy facts").
 
 export const TILE_SIZE = 32;
-export const WORLD_WIDTH = 1120; // 35 tiles × 32 px
-export const WORLD_HEIGHT = 1120;
+export const MAP_TILES = 35;
+export const WORLD_WIDTH = MAP_TILES * TILE_SIZE; // 1120
+export const WORLD_HEIGHT = MAP_TILES * TILE_SIZE;
 
 export const PLAYER_SPEED = 100; // px/s — legacy player.stats.movement
 export const DIAGONAL_FACTOR = 0.7071; // legacy used .7071, not Math.SQRT1_2
@@ -114,14 +119,17 @@ export const DIR_UP = 1;
 export const DIR_LEFT = 2;
 export const DIR_RIGHT = 3;
 
-// Legacy player.js spawn table, verbatim.
+// Legacy player.js spawn table — with one deviation: legacy (896,704) overlaps a
+// wall under our centered-AABB convention (legacy relied on Phaser 2 arcade
+// de-penetration), so it is nudged into the open column at (912,704).
+// All 8 verified non-overlapping with ≥22 px of clear travel upward.
 export const SPAWN_POINTS = [
   { x: 128, y: 128 },
   { x: 992, y: 128 },
   { x: 384, y: 416 },
   { x: 736, y: 416 },
   { x: 224, y: 704 },
-  { x: 896, y: 704 },
+  { x: 912, y: 704 },
   { x: 96, y: 992 },
   { x: 992, y: 992 },
 ] as const;
@@ -149,15 +157,43 @@ export * from "./messages.js";
 export * from "./tuning.js";
 ```
 
-- [ ] **Step 4: Build + typecheck**
+- [ ] **Step 4: Add the globals the new code will need to `eslint.config.mjs`**
 
-Run: `pnpm --filter @genzed/shared build && pnpm typecheck`
+The flat config hand-curates globals (`no-undef` is active for TS). Three edits:
+
+In `browserGlobals` add:
+
+```js
+  performance: "readonly",
+```
+
+In `nodeGlobals` add:
+
+```js
+  URL: "readonly",
+```
+
+Remove `"tests/**/*.{ts,tsx}"` from the node-environment `files` list, and add a new override block after it (Playwright tests run Node-side but `page.evaluate` snippets reference `window`):
+
+```js
+  {
+    // Playwright tests: Node host + browser-evaluated snippets.
+    files: ["tests/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { ...nodeGlobals, window: "readonly" },
+    },
+  },
+```
+
+- [ ] **Step 5: Build + typecheck + lint**
+
+Run: `pnpm --filter @genzed/shared build && pnpm typecheck && pnpm lint`
 Expected: clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add shared/src
+git add shared/src eslint.config.mjs
 git commit -m "feat(shared): movement tuning constants and input message type"
 ```
 
@@ -175,7 +211,14 @@ git commit -m "feat(shared): movement tuning constants and input message type"
 ```ts
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { buildSolidityGrid, isSolidTile, SPAWN_POINTS, TILE_SIZE, type TiledMapJson } from "@genzed/shared";
+import {
+  buildSolidityGrid,
+  isSolidTile,
+  MAP_TILES,
+  SPAWN_POINTS,
+  TILE_SIZE,
+  type TiledMapJson,
+} from "@genzed/shared";
 
 const mapJson = JSON.parse(
   readFileSync(new URL("../../../client/public/assets/maps/main.json", import.meta.url), "utf8"),
@@ -185,8 +228,8 @@ describe("buildSolidityGrid (real arena map)", () => {
   const grid = buildSolidityGrid(mapJson);
 
   it("is 35×35", () => {
-    expect(grid.width).toBe(35);
-    expect(grid.height).toBe(35);
+    expect(grid.width).toBe(MAP_TILES);
+    expect(grid.height).toBe(MAP_TILES);
   });
 
   it("unions the three collision layers to exactly 411 solid tiles", () => {
@@ -251,7 +294,7 @@ export function buildSolidityGrid(map: TiledMapJson): SolidityGrid {
     if (layer.type !== "tilelayer" || !layer.data) continue;
     if (layer.properties?.collision !== "true") continue;
     for (let i = 0; i < layer.data.length; i += 1) {
-      if (layer.data[i] !== 0) solid[i] = 1;
+      if ((layer.data[i] ?? 0) !== 0) solid[i] = 1; // ?? for noUncheckedIndexedAccess
     }
   }
   return { width: map.width, height: map.height, solid };
@@ -302,6 +345,8 @@ import {
   stepPlayer,
   PLAYER_SPEED,
   DIAGONAL_FACTOR,
+  PLAYER_W,
+  WORLD_WIDTH,
   type SolidityGrid,
 } from "@genzed/shared";
 
@@ -374,6 +419,13 @@ describe("move (axis-separated AABB sweep)", () => {
     const g2 = makeGrid(10, 10, [[2, 1]]);
     const up = move(g2, 80, 80, 0, -20);
     expect(up.y).toBeCloseTo(74, 1);
+  });
+
+  it("never leaves the world bounds", () => {
+    // Full-size empty grid: the only stop at the rim is the out-of-bounds/world clamp.
+    const g = makeGrid(35, 35);
+    const r = move(g, 1100, 560, 25, 0);
+    expect(r.x).toBeCloseTo(WORLD_WIDTH - PLAYER_W / 2, 1);
   });
 });
 
@@ -568,23 +620,24 @@ git commit -m "feat(server): movement fields on Player schema"
 
 ---
 
-### Task 6: Server map loader (`sim/mapData.ts`) — TDD
+### Task 6: Server map loader (`sim/collision.ts`) — TDD
 
 **Files:**
-- Create: `server/src/sim/mapData.ts`
-- Test: `server/src/__tests__/mapData.test.ts`
+- Create: `server/src/sim/collision.ts`
+- Test: `server/src/__tests__/collision.test.ts`
 
-- [ ] **Step 1: Write the failing test** — `server/src/__tests__/mapData.test.ts`
+- [ ] **Step 1: Write the failing test** — `server/src/__tests__/collision.test.ts`
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { loadSolidityGrid } from "../sim/mapData.js";
+import { MAP_TILES } from "@genzed/shared";
+import { loadSolidityGrid } from "../sim/collision.js";
 
 describe("loadSolidityGrid", () => {
   it("loads the arena map from disk and builds a 35×35 grid", () => {
     const grid = loadSolidityGrid();
-    expect(grid.width).toBe(35);
-    expect(grid.height).toBe(35);
+    expect(grid.width).toBe(MAP_TILES);
+    expect(grid.height).toBe(MAP_TILES);
   });
 
   it("caches the grid (same reference on repeat calls)", () => {
@@ -595,10 +648,10 @@ describe("loadSolidityGrid", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm -C server exec vitest run src/__tests__/mapData.test.ts`
-Expected: FAIL — cannot find module `../sim/mapData.js`.
+Run: `pnpm -C server exec vitest run src/__tests__/collision.test.ts`
+Expected: FAIL — cannot find module `../sim/collision.js`.
 
-- [ ] **Step 3: Create `server/src/sim/mapData.ts`**
+- [ ] **Step 3: Create `server/src/sim/collision.ts`**
 
 ```ts
 import { readFileSync } from "node:fs";
@@ -635,13 +688,13 @@ export function loadSolidityGrid(): SolidityGrid {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm -C server exec vitest run src/__tests__/mapData.test.ts`
+Run: `pnpm -C server exec vitest run src/__tests__/collision.test.ts`
 Expected: 2 passing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/sim/mapData.ts server/src/__tests__/mapData.test.ts
+git add server/src/sim/collision.ts server/src/__tests__/collision.test.ts
 git commit -m "feat(server): load arena solidity grid from the shipped map JSON"
 ```
 
@@ -780,7 +833,7 @@ import {
   type InputMessage,
 } from "@genzed/shared";
 import { ArenaState, Player } from "../schema/ArenaState.js";
-import { loadSolidityGrid } from "../sim/mapData.js";
+import { loadSolidityGrid } from "../sim/collision.js";
 
 const MAX_CLIENTS = 4;
 const MIN_TO_START = 2;
@@ -901,6 +954,7 @@ export class ArenaRoom extends Room<ArenaState> {
     let i = 0;
     this.state.players.forEach((player) => {
       const p = points[i % points.length];
+      if (!p) return; // noUncheckedIndexedAccess; unreachable (points is non-empty)
       player.x = p.x;
       player.y = p.y;
       player.vx = 0;
@@ -968,6 +1022,7 @@ git commit -m "feat(server): authoritative movement tick with input queues and l
 
 **Files:**
 - Modify: `client/src/lobby/arenaState.ts`
+- Modify: `client/src/lobby/useArenaRoom.ts`
 
 - [ ] **Step 1: Update the mirror** (full new content)
 
@@ -1006,15 +1061,39 @@ export type ArenaState = {
 };
 ```
 
-- [ ] **Step 2: Typecheck**
+- [ ] **Step 2: Fix `useArenaRoom.ts` to store live schema references**
+
+The hook's `sync()` currently rebuilds the players map from 3-field object literals, which no longer satisfy the expanded `LobbyPlayer`. Store the live schema instance instead (the Map identity change still drives React re-renders, and lobby reads stay correct):
+
+In `client/src/lobby/useArenaRoom.ts`, replace:
+
+```ts
+      const next = new Map<string, LobbyPlayer>();
+      room.state.players.forEach((p, id) => {
+        next.set(id, { name: p.name, ready: p.ready, joinedAt: p.joinedAt });
+      });
+      setPlayers(next);
+```
+
+with:
+
+```ts
+      const next = new Map<string, LobbyPlayer>();
+      room.state.players.forEach((p, id) => {
+        next.set(id, p);
+      });
+      setPlayers(next);
+```
+
+- [ ] **Step 3: Typecheck**
 
 Run: `pnpm typecheck`
-Expected: clean (fields are additive; lobby components unaffected).
+Expected: clean.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add client/src/lobby/arenaState.ts
+git add client/src/lobby/arenaState.ts client/src/lobby/useArenaRoom.ts
 git commit -m "feat(client): mirror movement fields on the schema type"
 ```
 
@@ -1025,7 +1104,7 @@ git commit -m "feat(client): mirror movement fields on the schema type"
 **Files:**
 - Create: `client/src/game/animations.ts`
 
-The frame-name tables below were derived from the legacy numeric indices against `playerRolls.json` hash order — **use them verbatim, do not re-derive**. Legacy also flipped `scale.x = -1` while moving left; we use the dedicated left frames without flipping first, and flip only if visual verification (Task 13) shows mirrored-looking frames.
+The frame-name tables below were derived from the legacy numeric indices against `playerRolls.json` hash order — **use them verbatim, do not re-derive**. Leftward movement: verified in `legacy/.../zgsHelpers/handlePlayerInput.js:143-148` that legacy played the **right** animation with `scale.setTo(-1, 1)` while walking left — the registered 'left' frame table was never actually played for players. The faithful port is therefore **walk-left = the right animation + `flipX = true`** on the sprite; there is no separate left animation.
 
 - [ ] **Step 1: Create `client/src/game/animations.ts`**
 
@@ -1039,15 +1118,15 @@ export const IDLE_FRAME = "playerSprites_243.png";
 export const ANIM = {
   down: "walk-down",
   up: "walk-up",
-  left: "walk-left",
-  right: "walk-right",
+  right: "walk-right", // walking left = this animation with flipX (legacy behavior)
   idle: "idle",
 } as const;
 
+// DIR_LEFT maps to the right-walk animation — the scene sets flipX for left.
 export const DIR_ANIM: Record<number, string> = {
   [DIR_DOWN]: ANIM.down,
   [DIR_UP]: ANIM.up,
-  [DIR_LEFT]: ANIM.left,
+  [DIR_LEFT]: ANIM.right,
   [DIR_RIGHT]: ANIM.right,
 };
 
@@ -1061,14 +1140,6 @@ const FRAMES: Record<string, string[]> = {
     "playerSprites_266 copy.png",
     "movingRight4.png",
     "movingRight5.png",
-  ],
-  [ANIM.left]: [
-    "okeydokey.png",
-    "movingLeft4.png",
-    "RightComingDown1.png",
-    "playerSprites_244.png",
-    "lookingRightRightLegUp.png",
-    "moveRightBothLegsUp (1).png",
   ],
   [ANIM.up]: [
     "movingUpRightFootDown.png",
@@ -1193,37 +1264,40 @@ export type InterpSample = { x: number; y: number; dir: number; moving: boolean 
 export class RemoteInterpolation {
   private buf: Snapshot[] = [];
 
+  // Indexed reads are guarded throughout — noUncheckedIndexedAccess is on.
   push(x: number, y: number, dir: number): void {
     const now = performance.now();
     this.buf.push({ t: now, x, y, dir });
     const cutoff = now - 1000;
-    while (this.buf.length > 2 && this.buf[0].t < cutoff) this.buf.shift();
+    while (this.buf.length > 2) {
+      const head = this.buf[0];
+      if (!head || head.t >= cutoff) break;
+      this.buf.shift();
+    }
   }
 
   sample(): InterpSample | null {
-    const n = this.buf.length;
-    if (n === 0) return null;
+    const newest = this.buf[this.buf.length - 1];
+    const oldest = this.buf[0];
+    if (!newest || !oldest) return null;
     const target = performance.now() - INTERP_BUFFER_MS;
-    const newest = this.buf[n - 1];
     if (target >= newest.t) {
       return { x: newest.x, y: newest.y, dir: newest.dir, moving: false };
     }
-    const oldest = this.buf[0];
     if (target <= oldest.t) {
       return { x: oldest.x, y: oldest.y, dir: oldest.dir, moving: false };
     }
-    for (let i = n - 2; i >= 0; i -= 1) {
+    for (let i = this.buf.length - 2; i >= 0; i -= 1) {
       const a = this.buf[i];
-      if (a.t <= target) {
-        const b = this.buf[i + 1];
-        const f = (target - a.t) / (b.t - a.t);
-        return {
-          x: a.x + (b.x - a.x) * f,
-          y: a.y + (b.y - a.y) * f,
-          dir: b.dir,
-          moving: Math.abs(b.x - a.x) + Math.abs(b.y - a.y) > 0.5,
-        };
-      }
+      const b = this.buf[i + 1];
+      if (!a || !b || a.t > target) continue;
+      const f = (target - a.t) / (b.t - a.t);
+      return {
+        x: a.x + (b.x - a.x) * f,
+        y: a.y + (b.y - a.y) * f,
+        dir: b.dir,
+        moving: Math.abs(b.x - a.x) + Math.abs(b.y - a.y) > 0.5,
+      };
     }
     return { x: oldest.x, y: oldest.y, dir: oldest.dir, moving: false };
   }
@@ -1261,6 +1335,7 @@ import {
   WORLD_WIDTH,
   WORLD_HEIGHT,
   RECONCILE_SNAP_PX,
+  DIR_LEFT,
   buildSolidityGrid,
   type MoveInput,
   type SolidityGrid,
@@ -1357,6 +1432,10 @@ export class ArenaScene extends Phaser.Scene {
 
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
+    // Phaser 3 does NOT auto-call a method named shutdown() (that was Phaser 2);
+    // wire it explicitly or the schema listeners outlive the scene.
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
+
     // E2E hook (read by tests/movement.spec.ts).
     (window as unknown as { __arena?: ArenaDebugHook }).__arena = {
       players: () =>
@@ -1429,11 +1508,15 @@ export class ArenaScene extends Phaser.Scene {
     const moving = input.up || input.down || input.left || input.right;
     if (!moving) {
       view.sprite.play(ANIM.idle, true);
+      view.sprite.setFlipX(false);
       return;
     }
     // Horizontal wins on diagonals — same rule as the server's `dir`.
-    const key = input.right ? ANIM.right : input.left ? ANIM.left : input.down ? ANIM.down : ANIM.up;
+    // Walking left = the right animation mirrored (legacy behavior).
+    const goingLeft = input.left && !input.right;
+    const key = input.right || goingLeft ? ANIM.right : input.down ? ANIM.down : ANIM.up;
     view.sprite.play(key, true);
+    view.sprite.setFlipX(goingLeft);
   }
 
   update(_time: number, delta: number): void {
@@ -1458,7 +1541,8 @@ export class ArenaScene extends Phaser.Scene {
       const s = view.interp?.sample();
       if (!s) return;
       view.sprite.setPosition(s.x, s.y);
-      view.sprite.play(s.moving ? DIR_ANIM[s.dir] : ANIM.idle, true);
+      view.sprite.play(s.moving ? (DIR_ANIM[s.dir] ?? ANIM.idle) : ANIM.idle, true);
+      view.sprite.setFlipX(s.moving && s.dir === DIR_LEFT);
     });
 
     // Labels ride above sprites.
@@ -1583,7 +1667,7 @@ test("two players join, host starts, both see the arena", async ({ browser }) =>
 
 - [ ] **Step 3: Create `tests/movement.spec.ts`**
 
-Direction note: the test walks **up** (`w` key) — the only direction guaranteed open from every spawn point. One open tile guarantees ≥22 px of travel; a 600 ms hold attempts ~60 px, so asserting ≥15 px is safe regardless of which spawn was assigned.
+Direction note: the test walks **up** (`w` key) — verified with the sweep math to give ≥22 px of clear travel from every spawn in the (nudged) table; left/right/down are walled somewhere. A 600 ms hold attempts ~60 px, so asserting >15 px is safe regardless of which spawn was assigned.
 
 ```ts
 import { test, expect, type Page } from "@playwright/test";
@@ -1660,7 +1744,7 @@ Expected: all green.
 `pnpm dev`, two browsers, join + start. Verify and capture to `docs/stage3-evidence/`:
 - `stage3-01-arena-map.png` — tilemap rendered, sprites on spawns
 - `stage3-02-two-players.png` — both browsers side by side mid-movement
-- Walls block movement; sliding along walls works; remote motion smooth; local input → motion is immediate; left/right walk animations look correct (not mirrored — if mirrored, fix `animations.ts` per its comment and re-verify)
+- Walls block movement; sliding along walls works; remote motion smooth; local input → motion is immediate; walking left shows the mirrored right-walk animation (flipX — this IS the legacy look) on both the local and remote view
 
 - [ ] **Step 3: Prod build verification**
 
