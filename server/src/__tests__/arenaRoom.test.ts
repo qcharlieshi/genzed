@@ -18,6 +18,8 @@ async function bootOnce(): Promise<ColyseusTestServer> {
 
 afterEach(async () => {
   await colyseus?.shutdown();
+  // Small delay so the OS releases port 2568 before the next test boots a new server.
+  await new Promise((r) => setTimeout(r, 150));
 });
 
 describe("ArenaRoom — initial state", () => {
