@@ -78,7 +78,7 @@ describe("ArenaRoom — start_game", () => {
     const c2 = await cs.connectTo(room, { name: "b" });
     c1.send(MSG_START_GAME);
     // Wait until phase becomes "starting" (within a tick or two).
-    await c2.waitForMessage("__irrelevant__").catch(() => {});
+    await c2.waitForNextPatch();
     await new Promise((r) => setTimeout(r, 200));
     expect(room.state.phase).toBe("starting");
     expect(room.state.countdownMs).toBeGreaterThan(0);
@@ -137,7 +137,7 @@ describe("ArenaRoom — reconnection", () => {
     expect(room.state.players.has(sessionId)).toBe(true);
     // Reconnect using the token.
     const c1again = await cs.sdk.reconnect(reconnectionToken);
-    await c1again.waitForNextPatch();
+    await new Promise((r) => setTimeout(r, 200));
     expect(room.state.players.has(c1again.sessionId)).toBe(true);
     expect(c1again.sessionId).toBe(sessionId);
   });

@@ -13,10 +13,6 @@ const COUNTDOWN_MS = 3000;
 const COUNTDOWN_TICK_MS = 100;
 const RECONNECT_SECONDS = 10;
 
-// Sentinel used by the test suite's waitForMessage("__irrelevant__") to detect
-// the phase transition quickly rather than waiting for the 3000ms timeout.
-const MSG_PHASE_CHANGED = "__irrelevant__";
-
 export class ArenaRoom extends Room<ArenaState> {
   // Set higher than MAX_CLIENTS so seat reservation always succeeds and
   // onAuth is the gating point for the 4-player cap (code 4003).
@@ -55,10 +51,7 @@ export class ArenaRoom extends Room<ArenaState> {
     }
     try {
       await this.allowReconnection(client, RECONNECT_SECONDS);
-      // Reconnected — touch player state so the next patch cycle sends a
-      // ROOM_STATE_PATCH to the reconnected client (needed for waitForNextPatch).
-      const player = this.state.players.get(client.sessionId);
-      if (player) player.joinedAt = Date.now();
+      // Reconnected — sessionId preserved.
     } catch {
       this.state.players.delete(client.sessionId);
     }
@@ -76,9 +69,6 @@ export class ArenaRoom extends Room<ArenaState> {
     if (this.state.players.size < MIN_TO_START) return;
     this.state.phase = "starting";
     this.state.countdownMs = COUNTDOWN_MS;
-    // Broadcast to all clients so waitForMessage("__irrelevant__") in tests
-    // resolves immediately rather than waiting for the 3000ms timeout.
-    this.broadcast(MSG_PHASE_CHANGED, null);
     this.countdownInterval = setInterval(() => {
       this.state.countdownMs = Math.max(0, this.state.countdownMs - COUNTDOWN_TICK_MS);
       if (this.state.countdownMs <= 0) {
