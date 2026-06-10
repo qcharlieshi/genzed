@@ -29,8 +29,10 @@ export class ArenaScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.room.state.players.forEach((p, id) => this.addLabel(id, p));
-    this.room.state.players.onAdd((p, id) => this.addLabel(id, p));
+    // onAdd fires for existing items in @colyseus/schema 2.x — no separate forEach.
+    this.room.state.players.onAdd((p, id) => {
+      if (!this.labels.has(id)) this.addLabel(id, p);
+    });
     this.room.state.players.onRemove((_p, id) => this.removeLabel(id));
 
     this.refreshHeader();
