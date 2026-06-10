@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useRoom } from "./RoomContext.js";
+import { CODE_GAME_IN_PROGRESS, CODE_LOBBY_FULL } from "@genzed/shared";
 
 export function NameEntry(): JSX.Element {
   const { status, error, join } = useRoom();
@@ -49,9 +50,9 @@ export function NameEntry(): JSX.Element {
 
 function humanizeError(code: number, fallback: string): string {
   switch (code) {
-    case 4001:
+    case CODE_GAME_IN_PROGRESS:
       return "A game is already in progress. Try again in a minute.";
-    case 4003:
+    case CODE_LOBBY_FULL:
       return "Lobby is full (4/4).";
     default:
       return fallback;

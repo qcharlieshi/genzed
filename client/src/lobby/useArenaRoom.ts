@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Room } from "colyseus.js";
-import type { Phase } from "@genzed/shared";
+import { MSG_START_GAME, MSG_END_GAME, type Phase } from "@genzed/shared";
 import {
   joinArena,
   reconnectArena,
@@ -81,8 +81,8 @@ export function useArenaRoom(): ArenaRoomHook {
       setError({ code, message: message ?? "room error" });
     });
     room.onLeave((code) => {
-      // 1000 = normal close (client-initiated); anything else = unexpected.
-      if (code === 1000) {
+      // 4000 = Colyseus consented close (client called room.leave()); anything else = unexpected.
+      if (code === 4000) {
         detach();
         setStatus("idle");
         return;
@@ -153,11 +153,11 @@ export function useArenaRoom(): ArenaRoomHook {
   }, [detach]);
 
   const start = useCallback(() => {
-    roomRef.current?.send("start_game");
+    roomRef.current?.send(MSG_START_GAME);
   }, []);
 
   const endGame = useCallback(() => {
-    roomRef.current?.send("end_game");
+    roomRef.current?.send(MSG_END_GAME);
   }, []);
 
   const giveUpReconnect = useCallback(() => {

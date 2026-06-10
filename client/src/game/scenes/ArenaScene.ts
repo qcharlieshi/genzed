@@ -12,6 +12,7 @@ export class ArenaScene extends Phaser.Scene {
   private labels = new Map<string, Phaser.GameObjects.Text>();
   private room!: Room<ArenaState>;
   private localSessionId = "";
+  private unsubscribers: Array<() => void> = [];
 
   constructor() {
     super("arena");
@@ -30,10 +31,14 @@ export class ArenaScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     // onAdd fires for existing items in @colyseus/schema 2.x — no separate forEach.
-    this.room.state.players.onAdd((p, id) => {
-      if (!this.labels.has(id)) this.addLabel(id, p);
-    });
-    this.room.state.players.onRemove((_p, id) => this.removeLabel(id));
+    this.unsubscribers.push(
+      this.room.state.players.onAdd((p, id) => {
+        if (!this.labels.has(id)) this.addLabel(id, p);
+      }) as unknown as () => void,
+    );
+    this.unsubscribers.push(
+      this.room.state.players.onRemove((_p, id) => this.removeLabel(id)) as unknown as () => void,
+    );
 
     this.refreshHeader();
   }
@@ -73,5 +78,13 @@ export class ArenaScene extends Phaser.Scene {
   private refreshHeader(): void {
     const count = this.labels.size;
     this.header.setText(`GAME ON — ${count} player${count === 1 ? "" : "s"}`);
+  }
+
+  shutdown(): void {
+    this.unsubscribers.forEach((unsub) => {
+      try { unsub(); } catch { /* ignore */ }
+    });
+    this.unsubscribers = [];
+    this.labels.clear();
   }
 }

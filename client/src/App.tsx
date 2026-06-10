@@ -10,9 +10,9 @@ export function App(): JSX.Element {
   const hook = useArenaRoom();
 
   let view: JSX.Element;
-  if (hook.status === "joined" && hook.phase === "playing") {
+  if ((hook.status === "joined" || hook.status === "reconnecting") && hook.phase === "playing") {
     view = <GameMount />;
-  } else if (hook.status === "joined") {
+  } else if (hook.status === "joined" || hook.status === "reconnecting") {
     view = (
       <>
         <Lobby />
