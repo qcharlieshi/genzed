@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import Phaser from "phaser";
 import { HelloScene } from "./scenes/HelloScene.js";
-import { connectArena } from "./net/connect.js";
 
 export function GameMount(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -19,23 +18,7 @@ export function GameMount(): JSX.Element {
     });
     game.scene.start("hello", { status: "connecting..." });
 
-    let cancelled = false;
-    connectArena("guest")
-      .then((room) => {
-        if (cancelled) {
-          room.leave();
-          return;
-        }
-        scene.setStatus(`connected: ${room.sessionId}`);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        console.error(err);
-        scene.setStatus("connection failed");
-      });
-
     return () => {
-      cancelled = true;
       game.destroy(true);
     };
   }, []);
