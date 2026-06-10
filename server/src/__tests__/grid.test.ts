@@ -4,6 +4,8 @@ import {
   buildSolidityGrid,
   isSolidTile,
   MAP_TILES,
+  PLAYER_H,
+  PLAYER_W,
   SPAWN_POINTS,
   TILE_SIZE,
   type TiledMapJson,
@@ -37,9 +39,17 @@ describe("buildSolidityGrid (real arena map)", () => {
     expect(isSolidTile(grid, 35, 0)).toBe(true);
   });
 
-  it("keeps all 8 legacy spawn tiles walkable", () => {
+  it("keeps all 8 spawn AABB footprints walkable", () => {
     for (const p of SPAWN_POINTS) {
-      expect(isSolidTile(grid, Math.floor(p.x / TILE_SIZE), Math.floor(p.y / TILE_SIZE))).toBe(false);
+      const tx0 = Math.floor((p.x - PLAYER_W / 2) / TILE_SIZE);
+      const tx1 = Math.floor((p.x + PLAYER_W / 2 - 0.001) / TILE_SIZE);
+      const ty0 = Math.floor((p.y - PLAYER_H / 2) / TILE_SIZE);
+      const ty1 = Math.floor((p.y + PLAYER_H / 2 - 0.001) / TILE_SIZE);
+      for (let tx = tx0; tx <= tx1; tx += 1) {
+        for (let ty = ty0; ty <= ty1; ty += 1) {
+          expect(isSolidTile(grid, tx, ty), `spawn (${p.x},${p.y}) tile (${tx},${ty})`).toBe(false);
+        }
+      }
     }
   });
 });

@@ -81,6 +81,14 @@ describe("move (axis-separated AABB sweep)", () => {
     expect(up.y).toBeCloseTo(74, 1);
   });
 
+  it("indexes non-square grids correctly", () => {
+    // 12 wide × 6 tall; solid tile (9,2) spans x [288,320). Right edge stops at 288 → x = 280.
+    const g = makeGrid(12, 6, [[9, 2]]);
+    const r = move(g, 264, 80, 20, 0);
+    expect(r.x).toBeCloseTo(280, 1);
+    expect(r.y).toBe(80);
+  });
+
   it("never leaves the world bounds", () => {
     // Full-size empty grid: the only stop at the rim is the out-of-bounds/world clamp.
     const g = makeGrid(35, 35);
