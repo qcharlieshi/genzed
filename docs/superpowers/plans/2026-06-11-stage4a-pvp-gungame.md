@@ -429,7 +429,9 @@ describe("roll FSM", () => {
       expect(s.rollDirMask).toBe(8); // still the original roll's mask
     }
     expect(s.rollTicksLeft).toBe(0); // roll itself ended after 12 ticks
-    expect(s.rollCooldownTicks).toBe(0); // tick 20: cooldown spent
+    // 19 decrements have run (ticks 1..19) → cd = 1. The 20th call decrements
+    // it to 0 and THEN checks the gate, so the re-roll lands exactly at tick 20.
+    expect(s.rollCooldownTicks).toBe(1);
     s = stepPlayer(g, s, { ...IDLE_SIM, roll: true, up: true }).sim; // tick 20 — allowed
     expect(s.rollTicksLeft).toBe(ROLL_DURATION_TICKS - 1);
     expect(s.rollDirMask).toBe(1);
@@ -718,7 +720,7 @@ Add to the `Player` class:
 
 - [ ] **Step 8: Thread the sim through `server/src/rooms/ArenaRoom.ts`**
 
-Three edits:
+Five edits:
 
 (a) Extend `isInputMessage` — add to the returned conjunction:
 
@@ -774,6 +776,8 @@ Three edits:
       player.rollCooldownTicks = 0;
       player.speedBonus = 0;
 ```
+
+(e) Prune the now-unused imports: `stepPlayer` no longer needs the room to compute facing, so drop `DIR_UP`, `DIR_LEFT`, `DIR_RIGHT` from the `@genzed/shared` import (keep `DIR_DOWN` — `assignSpawns` uses it). `no-unused-vars` is an error in the flat config; the lint gate fails otherwise.
 
 - [ ] **Step 9: Mirror the sim fields in `client/src/lobby/arenaState.ts`**
 
@@ -974,7 +978,7 @@ describe("server/prediction sim parity (the ONE-simulation invariant)", () => {
       prediction.sample(input, input.aimAngle);
       server.apply(input);
       if (seq === 5 || seq === 17 || seq === 30) {
-        prediction.reconcile({ ...server.sim }, seq); // mid-roll, mid-cooldown, post-roll
+        prediction.reconcile({ ...server.sim }, seq); // mid-roll, mid-cooldown, mid-third-roll
         expect(prediction.sim).toEqual(server.sim);
       }
     });
@@ -989,10 +993,20 @@ describe("server/prediction sim parity (the ONE-simulation invariant)", () => {
 Run: `pnpm -C server exec vitest run src/__tests__/simParity.test.ts`
 Expected: 5 passing.
 
-- [ ] **Step 14: Full gates (regression — the whole repo compiles against the new sim)**
+- [ ] **Step 14: Update `arenaMovement.test.ts` for the extended message**
+
+The extended validator silently drops messages missing `roll`/`aimAngle`, which would fail every movement assertion. In `server/src/__tests__/arenaMovement.test.ts`, replace the `IDLE` constant with:
+
+```ts
+const IDLE = { up: false, down: false, left: false, right: false, roll: false, aimAngle: 0 };
+```
+
+(Every input literal in that file spreads `IDLE`, so this one line is the whole fix. `arenaRoom.test.ts` sends no inputs.)
+
+- [ ] **Step 14b: Full gates (regression — the whole repo compiles against the new sim)**
 
 Run: `pnpm --filter @genzed/shared build && pnpm build && pnpm typecheck && pnpm lint && pnpm test`
-Expected: clean. `arenaMovement.test.ts` still passes — its `IDLE` literal lacks `roll`/`aimAngle`, so update its `IDLE` constant to `{ up: false, down: false, left: false, right: false, roll: false, aimAngle: 0 }` (one-line change; the messages it sends must satisfy the extended validator or inputs are silently dropped and the movement assertions fail).
+Expected: clean.
 
 - [ ] **Step 15: E2E regression (prediction rewiring is render-path code)**
 
@@ -1299,9 +1313,12 @@ describe("game-start combat reset", () => {
 describe("fire gates", () => {
   it("spawns a bullet flying toward the target and spends ammo", async () => {
     const { room, c1, p1 } = await startedGame();
-    p1.x = 384;
-    p1.y = 416;
-    c1.send(MSG_FIRE, { tx: 484, ty: 416 });
+    // (128,128) firing right along the verified-clear row to (992,128) — the
+    // bullet must still be alive when we look (Task 7 makes bullets move and
+    // die on walls; a fire ray with a wall ~60 px out would vaporize it).
+    p1.x = 128;
+    p1.y = 128;
+    c1.send(MSG_FIRE, { tx: 228, ty: 128 });
     await sleep(150);
     expect(room.state.bullets.size).toBe(1);
     const bullet = [...room.state.bullets.values()][0];
@@ -1314,10 +1331,10 @@ describe("fire gates", () => {
 
   it("rate-limits to the gun's fire interval", async () => {
     const { room, c1, p1 } = await startedGame();
-    p1.x = 384;
-    p1.y = 416;
-    c1.send(MSG_FIRE, { tx: 484, ty: 416 });
-    c1.send(MSG_FIRE, { tx: 484, ty: 416 }); // inside the 350 ms pistol interval
+    p1.x = 128;
+    p1.y = 128; // clear fire ray — see above
+    c1.send(MSG_FIRE, { tx: 228, ty: 128 });
+    c1.send(MSG_FIRE, { tx: 228, ty: 128 }); // inside the 350 ms pistol interval
     await sleep(150);
     expect(room.state.bullets.size).toBe(1);
     expect(p1.ammo).toBe(9);
@@ -2893,19 +2910,24 @@ import { ArenaHud, GUN_CONTAINER_KEY, HEARTS_KEY, MEDALS_ATLAS, RELOAD_ATLAS } f
 ```ts
     this.hud = new ArenaHud(this);
 
-    // Broadcast events → sounds / FX / feed.
-    this.room.onMessage(EVT_SHOT, (m: ShotEvent) => this.onShot(m));
-    this.room.onMessage(EVT_LOG, (m: LogEvent) => this.hud.pushFeedLine(m.text));
-    this.room.onMessage(EVT_RELOAD_RESULT, (m: ReloadResultEvent) => {
-      if (m.ok) {
-        this.reloadJammed = false;
-        this.hud.flashReloadSuccess();
-        this.sound.play("reloadOk");
-      } else {
-        this.reloadJammed = true;
-        this.sound.play("reloadFail");
-      }
-    });
+    // Broadcast events → sounds / FX / feed. The unbind closures MUST be kept:
+    // the Room outlives the scene (win → lobby → next game remounts a fresh
+    // scene on the SAME room), and colyseus.js onMessage handlers accumulate —
+    // an unbound handler would fire into a destroyed scene next game.
+    this.unsubscribers.push(
+      this.room.onMessage(EVT_SHOT, (m: ShotEvent) => this.onShot(m)) as unknown as () => void,
+      this.room.onMessage(EVT_LOG, (m: LogEvent) => this.hud.pushFeedLine(m.text)) as unknown as () => void,
+      this.room.onMessage(EVT_RELOAD_RESULT, (m: ReloadResultEvent) => {
+        if (m.ok) {
+          this.reloadJammed = false;
+          this.hud.flashReloadSuccess();
+          this.sound.play("reloadOk");
+        } else {
+          this.reloadJammed = true;
+          this.sound.play("reloadFail");
+        }
+      }) as unknown as () => void,
+    );
 
     this.sound.play("theme", { loop: true, volume: 0.25 });
 ```
@@ -3028,9 +3050,19 @@ One fat spec (the lobby room is shared; `workers: 1`). Deterministic positioning
 
 ```ts
 import { test, expect, type Page } from "@playwright/test";
-import { twoPlayersInArena } from "./helpers.js";
+import { twoPlayersInArena } from "./helpers";
 
 // All evaluates inline the window access — closures don't serialize into the page.
+
+// The canvas appears at Phaser boot, BEFORE create() installs window.__arena
+// (preload now fetches ~MBs of audio) — wait for the hook or teleports no-op.
+async function hookReady(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => Boolean((window as unknown as { __arena?: unknown }).__arena)), {
+      timeout: 15_000,
+    })
+    .toBe(true);
+}
 
 async function teleportTo(page: Page, x: number, y: number): Promise<void> {
   await page.evaluate(
@@ -3078,6 +3110,9 @@ test("A shoots B: hp drops, slain feed line on both clients, killer levels up, v
   test.setTimeout(90_000);
   const { pageA, pageB, errors, close } = await twoPlayersInArena(browser);
   try {
+    await hookReady(pageA);
+    await hookReady(pageB);
+
     // Deterministic LoS pair, verified against the wallCollision grid.
     await teleportTo(pageA, 384, 416);
     await teleportTo(pageB, 224, 704);
@@ -3129,7 +3164,7 @@ Expected: smoke + movement + combat all green.
 - [ ] **Step 3: Full gates one more time**
 
 Run: `pnpm --filter @genzed/shared build && pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e`
-Expected: everything green.
+Expected: everything green. If `smoke.spec.ts`/`movement.spec.ts` newly collect audio console errors from the theme autoplay (they assert `errors` strictly), centralize the `/AudioContext|autoplay/i` filter into `tests/helpers.ts` rather than weakening each spec.
 
 - [ ] **Step 4: Commit**
 
