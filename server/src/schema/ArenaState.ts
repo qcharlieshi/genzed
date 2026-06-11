@@ -11,6 +11,10 @@ export class Player extends Schema {
   @type("number") vy = 0;
   @type("uint8") dir = 0; // DIR_DOWN/UP/LEFT/RIGHT from @genzed/shared tuning
   @type("uint32") lastProcessedInput = 0;
+  @type("uint8") rollTicksLeft = 0;
+  @type("uint8") rollDirMask = 0;
+  @type("uint8") rollCooldownTicks = 0;
+  @type("uint8") speedBonus = 0;
 }
 
 export class ArenaState extends Schema {

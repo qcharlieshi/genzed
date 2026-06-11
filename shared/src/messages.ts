@@ -14,6 +14,8 @@ export type InputMessage = {
   down: boolean;
   left: boolean;
   right: boolean;
+  roll: boolean; // rides the seq'd, replay-guarded, prediction-replayed channel
+  aimAngle: number; // radians; NOT predicted — server applies, remotes render
 };
 
 // --- Stage 4A combat commands (server-gated, bypass the per-tick input cap) ---

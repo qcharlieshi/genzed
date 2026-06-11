@@ -10,6 +10,10 @@ export type LobbyPlayer = {
   vy: number;
   dir: number;
   lastProcessedInput: number;
+  rollTicksLeft: number;
+  rollDirMask: number;
+  rollCooldownTicks: number;
+  speedBonus: number;
   // @colyseus/schema 2.x instance callback — callable, returns a detach fn
   // (cast at the call site like the existing players.onAdd usage).
   onChange: (cb: () => void) => unknown;

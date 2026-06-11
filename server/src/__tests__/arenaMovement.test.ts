@@ -11,7 +11,7 @@ afterEach(async () => {
   await new Promise((r) => setTimeout(r, 150));
 });
 
-const IDLE = { up: false, down: false, left: false, right: false };
+const IDLE = { up: false, down: false, left: false, right: false, roll: false, aimAngle: 0 };
 
 async function startedGame() {
   colyseus = await boot(appConfig);

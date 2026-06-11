@@ -8,13 +8,14 @@ import {
   RECONCILE_SNAP_PX,
   DIR_LEFT,
   buildSolidityGrid,
-  type MoveInput,
+  LocalPrediction,
+  type PlayerSim,
+  type SimInput,
   type SolidityGrid,
   type TiledMapJson,
 } from "@genzed/shared";
 import type { ArenaState, LobbyPlayer } from "../../lobby/arenaState.js";
 import { ANIM, DIR_ANIM, IDLE_FRAME, PLAYER_ATLAS, registerPlayerAnimations } from "../animations.js";
-import { LocalPrediction } from "../net/prediction.js";
 import { RemoteInterpolation } from "../net/interpolation.js";
 
 export type ArenaSceneData = {
@@ -53,13 +54,25 @@ const LABEL_STYLE = {
   fontSize: "10px",
 } as const;
 
+function simFromPlayer(p: LobbyPlayer): PlayerSim {
+  return {
+    x: p.x,
+    y: p.y,
+    dir: p.dir,
+    rollTicksLeft: p.rollTicksLeft,
+    rollDirMask: p.rollDirMask,
+    rollCooldownTicks: p.rollCooldownTicks,
+    speedBonus: p.speedBonus,
+  };
+}
+
 export class ArenaScene extends Phaser.Scene {
   private room!: Room<ArenaState>;
   private localSessionId = "";
   private views = new Map<string, PlayerView>();
   private grid!: SolidityGrid;
   private prediction: LocalPrediction | null = null;
-  private keys!: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
+  private keys!: Record<"W" | "A" | "S" | "D" | "SPACE", Phaser.Input.Keyboard.Key>;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -101,7 +114,7 @@ export class ArenaScene extends Phaser.Scene {
       this.room.state.players.onRemove((_p, id) => this.removePlayer(id)) as unknown as () => void,
     );
 
-    this.keys = this.input.keyboard!.addKeys("W,A,S,D") as ArenaScene["keys"];
+    this.keys = this.input.keyboard!.addKeys("W,A,S,D,SPACE") as ArenaScene["keys"];
     this.time.addEvent({ delay: TICK_MS, loop: true, callback: () => this.sampleInput() });
 
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -135,17 +148,10 @@ export class ArenaScene extends Phaser.Scene {
       .setOrigin(0.5, 1);
 
     if (isLocal) {
-      // Seed the seq counter past the server's watermark so a mid-game
-      // reconnect doesn't send seqs the replay guard has already acked.
-      this.prediction = new LocalPrediction(
-        player.x,
-        player.y,
-        this.grid,
-        player.lastProcessedInput + 1,
-      );
+      this.prediction = new LocalPrediction(simFromPlayer(player), this.grid, player.lastProcessedInput + 1);
       this.cameras.main.startFollow(sprite, true, 0.15, 0.15);
       const unsubscribe = player.onChange(() => {
-        this.prediction?.reconcile(player.x, player.y, player.lastProcessedInput);
+        this.prediction?.reconcile(simFromPlayer(player), player.lastProcessedInput);
       }) as unknown as () => void;
       this.views.set(sessionId, { sprite, label, interp: null, unsubscribe });
     } else {
@@ -169,18 +175,22 @@ export class ArenaScene extends Phaser.Scene {
 
   private sampleInput(): void {
     if (!this.prediction) return;
-    const input: MoveInput = {
+    const input: SimInput = {
       up: this.keys.W.isDown,
       down: this.keys.S.isDown,
       left: this.keys.A.isDown,
       right: this.keys.D.isDown,
+      roll: Phaser.Input.Keyboard.JustDown(this.keys.SPACE),
     };
-    const msg = this.prediction.sample(input);
+    const pointer = this.input.activePointer;
+    pointer.updateWorldPoint(this.cameras.main);
+    const aimAngle = Math.atan2(pointer.worldY - this.prediction.y, pointer.worldX - this.prediction.x);
+    const msg = this.prediction.sample(input, aimAngle);
     this.room.send(MSG_INPUT, msg);
     this.updateLocalAnimation(input);
   }
 
-  private updateLocalAnimation(input: MoveInput): void {
+  private updateLocalAnimation(input: SimInput): void {
     const view = this.views.get(this.localSessionId);
     if (!view) return;
     const moving = input.up || input.down || input.left || input.right;

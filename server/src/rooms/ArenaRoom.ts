@@ -8,11 +8,9 @@ import {
   TICK_MS,
   SPAWN_POINTS,
   DIR_DOWN,
-  DIR_UP,
-  DIR_LEFT,
-  DIR_RIGHT,
   stepPlayer,
   type InputMessage,
+  type PlayerSim,
 } from "@genzed/shared";
 import { ArenaState, Player } from "../schema/ArenaState.js";
 import { loadSolidityGrid } from "../sim/collision.js";
@@ -39,7 +37,10 @@ function isInputMessage(m: unknown): m is InputMessage {
     typeof o.up === "boolean" &&
     typeof o.down === "boolean" &&
     typeof o.left === "boolean" &&
-    typeof o.right === "boolean"
+    typeof o.right === "boolean" &&
+    typeof o.roll === "boolean" &&
+    typeof o.aimAngle === "number" &&
+    Number.isFinite(o.aimAngle)
   );
 }
 
@@ -113,6 +114,18 @@ export class ArenaRoom extends Room<ArenaState> {
     if (queue.length > MAX_QUEUED_INPUTS) queue.shift();
   }
 
+  private simFromPlayer(player: Player): PlayerSim {
+    return {
+      x: player.x,
+      y: player.y,
+      dir: player.dir,
+      rollTicksLeft: player.rollTicksLeft,
+      rollDirMask: player.rollDirMask,
+      rollCooldownTicks: player.rollCooldownTicks,
+      speedBonus: player.speedBonus,
+    };
+  }
+
   private tick(): void {
     if (this.state.phase !== "playing") return;
     this.state.players.forEach((player, sessionId) => {
@@ -122,17 +135,16 @@ export class ArenaRoom extends Room<ArenaState> {
       const batch = queue.splice(0, MAX_INPUTS_PER_TICK); // remainder stays queued
       for (const input of batch) {
         if (input.seq <= player.lastProcessedInput) continue; // dup/replay guard
-        const r = stepPlayer(this.grid, player.x, player.y, input);
-        player.x = r.x;
-        player.y = r.y;
+        const r = stepPlayer(this.grid, this.simFromPlayer(player), input);
+        player.x = r.sim.x;
+        player.y = r.sim.y;
+        player.dir = r.sim.dir;
+        player.rollTicksLeft = r.sim.rollTicksLeft;
+        player.rollDirMask = r.sim.rollDirMask;
+        player.rollCooldownTicks = r.sim.rollCooldownTicks;
         player.vx = r.vx;
         player.vy = r.vy;
         player.lastProcessedInput = input.seq;
-        if (r.vx !== 0 || r.vy !== 0) {
-          // Horizontal wins on diagonals; facing persists when idle.
-          player.dir =
-            r.vx > 0 ? DIR_RIGHT : r.vx < 0 ? DIR_LEFT : r.vy > 0 ? DIR_DOWN : DIR_UP;
-        }
       }
     });
   }
@@ -149,6 +161,10 @@ export class ArenaRoom extends Room<ArenaState> {
       player.vy = 0;
       player.dir = DIR_DOWN;
       player.lastProcessedInput = 0;
+      player.rollTicksLeft = 0;
+      player.rollDirMask = 0;
+      player.rollCooldownTicks = 0;
+      player.speedBonus = 0;
       i += 1;
     });
   }
