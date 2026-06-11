@@ -11,7 +11,10 @@ export function App(): JSX.Element {
 
   let view: JSX.Element;
   if ((hook.status === "joined" || hook.status === "reconnecting") && hook.phase === "playing") {
-    view = <GameMount />;
+    // key=roomEpoch: a reconnect produces a new Room instance, but getRoom is a
+    // stable callback so GameMount's effect never re-runs — remounting is what
+    // rebinds Phaser (and prediction seeding) to the fresh room.
+    view = <GameMount key={hook.roomEpoch} />;
   } else if (hook.status === "joined" || hook.status === "reconnecting") {
     view = (
       <>

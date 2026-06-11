@@ -19,6 +19,9 @@ export type ArenaRoomHook = {
   players: Map<string, LobbyPlayer>;
   sessionId: string | null;
   reconnectSecondsLeft: number;
+  /** Bumps every time attach() binds a (re)connected room — keys GameMount so
+   * a reconnect remounts Phaser onto the fresh room instead of the dead socket. */
+  roomEpoch: number;
   error: RoomError | null;
   getRoom(): Room<ArenaState> | null;
   join(name: string): Promise<void>;
@@ -38,6 +41,7 @@ export function useArenaRoom(): ArenaRoomHook {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<RoomError | null>(null);
   const [reconnectSecondsLeft, setReconnectSecondsLeft] = useState(0);
+  const [roomEpoch, setRoomEpoch] = useState(0);
 
   const roomRef = useRef<Room<ArenaState> | null>(null);
   const reconnectTokenRef = useRef<string | null>(null);
@@ -61,6 +65,7 @@ export function useArenaRoom(): ArenaRoomHook {
     const { room, reconnectionToken } = connected;
     roomRef.current = room;
     reconnectTokenRef.current = reconnectionToken;
+    setRoomEpoch((e) => e + 1);
     setSessionId(room.sessionId);
     setStatus("joined");
     setError(null);
@@ -186,6 +191,7 @@ export function useArenaRoom(): ArenaRoomHook {
     sessionId,
     error,
     reconnectSecondsLeft,
+    roomEpoch,
     getRoom,
     join,
     leave,

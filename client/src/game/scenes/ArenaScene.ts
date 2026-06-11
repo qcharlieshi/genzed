@@ -107,8 +107,11 @@ export class ArenaScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     // Phaser 3 does NOT auto-call a method named shutdown() (that was Phaser 2);
-    // wire it explicitly or the schema listeners outlive the scene.
+    // wire it explicitly or the schema listeners outlive the scene. Listen for
+    // BOTH events: game.destroy(true) — GameMount's teardown path — emits only
+    // DESTROY, never SHUTDOWN. shutdown() is idempotent.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.shutdown());
 
     // E2E hook (read by tests/movement.spec.ts).
     (window as unknown as { __arena?: ArenaDebugHook }).__arena = {
@@ -238,5 +241,7 @@ export class ArenaScene extends Phaser.Scene {
     this.views.forEach((view) => view.unsubscribe());
     this.views.clear();
     this.prediction = null;
+    // Drop the E2E debug hook — otherwise it dangles holding the destroyed scene graph.
+    delete (window as unknown as { __arena?: unknown }).__arena;
   }
 }

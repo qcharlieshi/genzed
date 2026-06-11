@@ -23,13 +23,19 @@ const COUNTDOWN_MS = 3000;
 const COUNTDOWN_TICK_MS = 100;
 const RECONNECT_SECONDS = 10;
 const MAX_QUEUED_INPUTS = 10;
+// Inputs simulated per player per tick. >1 lets a client catch up after network
+// jitter; capping it stops an input flood from becoming a speed cheat (a full
+// 10-deep drain per 50 ms tick would be 10x movement speed).
+const MAX_INPUTS_PER_TICK = 2;
 
 function isInputMessage(m: unknown): m is InputMessage {
   if (typeof m !== "object" || m === null) return false;
   const o = m as Record<string, unknown>;
   return (
     typeof o.seq === "number" &&
-    Number.isFinite(o.seq) &&
+    Number.isInteger(o.seq) &&
+    o.seq >= 0 &&
+    o.seq < 4294967296 && // uint32 — lastProcessedInput compares unwrapped
     typeof o.up === "boolean" &&
     typeof o.down === "boolean" &&
     typeof o.left === "boolean" &&
@@ -113,21 +119,21 @@ export class ArenaRoom extends Room<ArenaState> {
       const queue = this.inputQueues.get(sessionId);
       if (!queue || queue.length === 0) return;
       queue.sort((a, b) => a.seq - b.seq);
-      for (const input of queue) {
+      const batch = queue.splice(0, MAX_INPUTS_PER_TICK); // remainder stays queued
+      for (const input of batch) {
         if (input.seq <= player.lastProcessedInput) continue; // dup/replay guard
         const r = stepPlayer(this.grid, player.x, player.y, input);
         player.x = r.x;
         player.y = r.y;
         player.vx = r.vx;
         player.vy = r.vy;
-        player.lastProcessedInput = input.seq >>> 0;
+        player.lastProcessedInput = input.seq;
         if (r.vx !== 0 || r.vy !== 0) {
           // Horizontal wins on diagonals; facing persists when idle.
           player.dir =
             r.vx > 0 ? DIR_RIGHT : r.vx < 0 ? DIR_LEFT : r.vy > 0 ? DIR_DOWN : DIR_UP;
         }
       }
-      queue.length = 0;
     });
   }
 
