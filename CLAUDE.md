@@ -25,7 +25,7 @@ The project is decomposed into 5 stages. Each gets its own spec → plan → bui
 
 1. ✅ **Foundation** — monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world (live now)
 2. ✅ **Lobby + room lifecycle** — name entry, host-starts, phase FSM, 10s reconnection grace, placeholder arena scene
-3. 🟡 **Movement + rendering** — Tiled map load, server-authoritative movement, client prediction + interpolation (In PR — branch `stage-3-movement`)
+3. ✅ **Movement + rendering** — Tiled map load, server-authoritative movement, client prediction + interpolation
 4. ⬜ **Combat** — weapons, bullets, zombies, damage, pickups, scoring (port tuning from `legacy/`)
 5. ⬜ **Polish + playtest** — tune feel, fix prediction snap, side-by-side parity with the original
 

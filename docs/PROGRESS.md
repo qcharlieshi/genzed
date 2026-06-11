@@ -27,7 +27,7 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | --- | --- | --- |
 | **1. Foundation** | Monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world | ✅ Shipped — live at https://genzed.fly.dev |
 | **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | ✅ Shipped |
-| **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | 🟡 In PR — branch `stage-3-movement` |
+| **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ✅ Shipped — merged to `master` 2026-06-10 |
 | **4. Combat** | Weapons, bullets, zombies, damage, pickups, scoring (port tuning from `legacy/`) | ⬜ Not started |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
 
