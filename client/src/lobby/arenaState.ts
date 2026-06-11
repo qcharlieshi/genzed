@@ -4,6 +4,15 @@ export type LobbyPlayer = {
   name: string;
   ready: boolean;
   joinedAt: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  dir: number;
+  lastProcessedInput: number;
+  // @colyseus/schema 2.x instance callback — callable, returns a detach fn
+  // (cast at the call site like the existing players.onAdd usage).
+  onChange: (cb: () => void) => unknown;
 };
 
 export type LobbyPlayers = {

@@ -19,6 +19,9 @@ export type ArenaRoomHook = {
   players: Map<string, LobbyPlayer>;
   sessionId: string | null;
   reconnectSecondsLeft: number;
+  /** Bumps every time attach() binds a (re)connected room — keys GameMount so
+   * a reconnect remounts Phaser onto the fresh room instead of the dead socket. */
+  roomEpoch: number;
   error: RoomError | null;
   getRoom(): Room<ArenaState> | null;
   join(name: string): Promise<void>;
@@ -38,6 +41,7 @@ export function useArenaRoom(): ArenaRoomHook {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<RoomError | null>(null);
   const [reconnectSecondsLeft, setReconnectSecondsLeft] = useState(0);
+  const [roomEpoch, setRoomEpoch] = useState(0);
 
   const roomRef = useRef<Room<ArenaState> | null>(null);
   const reconnectTokenRef = useRef<string | null>(null);
@@ -61,6 +65,7 @@ export function useArenaRoom(): ArenaRoomHook {
     const { room, reconnectionToken } = connected;
     roomRef.current = room;
     reconnectTokenRef.current = reconnectionToken;
+    setRoomEpoch((e) => e + 1);
     setSessionId(room.sessionId);
     setStatus("joined");
     setError(null);
@@ -70,7 +75,7 @@ export function useArenaRoom(): ArenaRoomHook {
       setCountdownMs(room.state.countdownMs);
       const next = new Map<string, LobbyPlayer>();
       room.state.players.forEach((p, id) => {
-        next.set(id, { name: p.name, ready: p.ready, joinedAt: p.joinedAt });
+        next.set(id, p);
       });
       setPlayers(next);
     };
@@ -169,6 +174,10 @@ export function useArenaRoom(): ArenaRoomHook {
     setStatus("idle");
   }, [detach]);
 
+  // Stable identity — GameMount's effect depends on this; a fresh closure per
+  // render would tear down and recreate the Phaser game on every state patch.
+  const getRoom = useCallback(() => roomRef.current, []);
+
   useEffect(() => () => {
     if (reconnectTimerRef.current) clearInterval(reconnectTimerRef.current);
     roomRef.current?.leave(true);
@@ -182,7 +191,8 @@ export function useArenaRoom(): ArenaRoomHook {
     sessionId,
     error,
     reconnectSecondsLeft,
-    getRoom: () => roomRef.current,
+    roomEpoch,
+    getRoom,
     join,
     leave,
     start,

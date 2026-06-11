@@ -15,6 +15,7 @@ const browserGlobals = {
   clearTimeout: "readonly",
   setInterval: "readonly",
   clearInterval: "readonly",
+  performance: "readonly",
 };
 
 const nodeGlobals = {
@@ -30,6 +31,7 @@ const nodeGlobals = {
   setImmediate: "readonly",
   clearImmediate: "readonly",
   global: "readonly",
+  URL: "readonly",
 };
 
 export default [
@@ -76,10 +78,16 @@ export default [
       "shared/**/*.{ts,tsx}",
       "*.config.{ts,mjs,js}",
       "playwright.config.ts",
-      "tests/**/*.{ts,tsx}",
     ],
     languageOptions: {
       globals: nodeGlobals,
+    },
+  },
+  {
+    // Playwright tests: Node host + browser-evaluated snippets.
+    files: ["tests/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { ...nodeGlobals, window: "readonly" },
     },
   },
 ];
