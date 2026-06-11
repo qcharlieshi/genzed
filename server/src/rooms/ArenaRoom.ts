@@ -8,6 +8,8 @@ import {
   TICK_MS,
   SPAWN_POINTS,
   DIR_DOWN,
+  PLAYER_HEALTH,
+  gunForLevel,
   stepPlayer,
   type InputMessage,
   type PlayerSim,
@@ -128,6 +130,7 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private tick(): void {
     if (this.state.phase !== "playing") return;
+    this.state.tick += 1;
     this.state.players.forEach((player, sessionId) => {
       const queue = this.inputQueues.get(sessionId);
       if (!queue || queue.length === 0) return;
@@ -141,6 +144,7 @@ export class ArenaRoom extends Room<ArenaState> {
         player.vx = r.vx;
         player.vy = r.vy;
         player.lastProcessedInput = input.seq;
+        player.aimAngle = input.aimAngle;
       }
     });
   }
@@ -161,8 +165,16 @@ export class ArenaRoom extends Room<ArenaState> {
       player.rollDirMask = 0;
       player.rollCooldownTicks = 0;
       player.speedBonus = 0;
+      player.hp = PLAYER_HEALTH;
+      player.gunLevel = 1;
+      player.ammo = gunForLevel(1).clip;
+      player.reloadStartedAt = 0;
+      player.aimAngle = 0;
+      player.immuneUntil = 0;
       i += 1;
     });
+    this.state.bullets.clear();
+    this.state.winnerName = "";
   }
 
   private handleStartGame(_client: Client): void {

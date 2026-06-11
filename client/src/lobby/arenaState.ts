@@ -1,6 +1,12 @@
 import type { Phase } from "@genzed/shared";
 
-export type LobbyPlayer = {
+// @colyseus/schema 2.x instance callbacks are callable and return a detach fn —
+// cast at call sites like the existing players.onAdd usage.
+export type SchemaCallbacks = {
+  onChange: (cb: () => void) => unknown;
+};
+
+export type LobbyPlayer = SchemaCallbacks & {
   name: string;
   ready: boolean;
   joinedAt: number;
@@ -14,23 +20,45 @@ export type LobbyPlayer = {
   rollDirMask: number;
   rollCooldownTicks: number;
   speedBonus: number;
-  // @colyseus/schema 2.x instance callback — callable, returns a detach fn
-  // (cast at the call site like the existing players.onAdd usage).
-  onChange: (cb: () => void) => unknown;
+  hp: number;
+  gunLevel: number;
+  ammo: number;
+  reloadStartedAt: number;
+  aimAngle: number;
+  immuneUntil: number;
 };
 
-export type LobbyPlayers = {
-  size: number;
-  forEach(cb: (player: LobbyPlayer, sessionId: string) => void): void;
-  get(sessionId: string): LobbyPlayer | undefined;
-  values(): IterableIterator<LobbyPlayer>;
-  keys(): IterableIterator<string>;
-  onAdd: (cb: (player: LobbyPlayer, sessionId: string) => void) => void;
-  onRemove: (cb: (player: LobbyPlayer, sessionId: string) => void) => void;
+export type BulletView = SchemaCallbacks & {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  level: number;
+  spawnTick: number;
 };
+
+export type SchemaMap<T> = {
+  size: number;
+  forEach(cb: (item: T, key: string) => void): void;
+  get(key: string): T | undefined;
+  values(): IterableIterator<T>;
+  keys(): IterableIterator<string>;
+  onAdd: (cb: (item: T, key: string) => void) => unknown;
+  onRemove: (cb: (item: T, key: string) => void) => unknown;
+};
+
+export type LobbyPlayers = SchemaMap<LobbyPlayer>;
 
 export type ArenaState = {
   phase: Phase;
   countdownMs: number;
+  tick: number;
+  winnerName: string;
   players: LobbyPlayers;
+  bullets: SchemaMap<BulletView>;
+  // schema 2.x property listener — callable, returns a detach fn
+  listen: (
+    prop: "phase" | "countdownMs" | "winnerName" | "tick",
+    cb: (value: unknown, previous: unknown) => void,
+  ) => unknown;
 };
