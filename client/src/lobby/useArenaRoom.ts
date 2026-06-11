@@ -70,7 +70,7 @@ export function useArenaRoom(): ArenaRoomHook {
       setCountdownMs(room.state.countdownMs);
       const next = new Map<string, LobbyPlayer>();
       room.state.players.forEach((p, id) => {
-        next.set(id, { name: p.name, ready: p.ready, joinedAt: p.joinedAt });
+        next.set(id, p);
       });
       setPlayers(next);
     };
