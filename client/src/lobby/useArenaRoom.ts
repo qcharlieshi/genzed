@@ -169,6 +169,10 @@ export function useArenaRoom(): ArenaRoomHook {
     setStatus("idle");
   }, [detach]);
 
+  // Stable identity — GameMount's effect depends on this; a fresh closure per
+  // render would tear down and recreate the Phaser game on every state patch.
+  const getRoom = useCallback(() => roomRef.current, []);
+
   useEffect(() => () => {
     if (reconnectTimerRef.current) clearInterval(reconnectTimerRef.current);
     roomRef.current?.leave(true);
@@ -182,7 +186,7 @@ export function useArenaRoom(): ArenaRoomHook {
     sessionId,
     error,
     reconnectSecondsLeft,
-    getRoom: () => roomRef.current,
+    getRoom,
     join,
     leave,
     start,
