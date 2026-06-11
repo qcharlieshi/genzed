@@ -1,5 +1,6 @@
 import { Schema, MapSchema, type } from "@colyseus/schema";
 import type { Phase } from "@genzed/shared";
+import { PLAYER_HEALTH, gunForLevel } from "@genzed/shared";
 
 export class Player extends Schema {
   @type("string") name = "";
@@ -17,9 +18,9 @@ export class Player extends Schema {
   @type("uint8") rollCooldownTicks = 0;
   @type("uint8") speedBonus = 0;
   // combat fields
-  @type("uint8") hp = 100;
+  @type("uint8") hp = PLAYER_HEALTH; // clamp to 0 before assigning — uint8 wraps
   @type("uint8") gunLevel = 1; // 1..6; 6 = won
-  @type("int16") ammo = 10; // -1 encodes ∞ (L5)
+  @type("int16") ammo = gunForLevel(1).clip; // -1 encodes ∞ (L5)
   @type("number") reloadStartedAt = 0; // server-clock ms; 0 = not reloading
   @type("float32") aimAngle = 0; // radians; remote gun rendering
   @type("number") immuneUntil = 0; // server-clock ms; respawn immunity
