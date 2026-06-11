@@ -42,7 +42,7 @@ export class LocalPrediction {
 
   reconcile(serverSim: PlayerSim, lastProcessedInput: number): void {
     this.pending = this.pending.filter((p) => p.seq > lastProcessedInput);
-    let sim = serverSim;
+    let sim = { ...serverSim };
     for (const p of this.pending) {
       sim = stepPlayer(this.grid, sim, p).sim;
     }

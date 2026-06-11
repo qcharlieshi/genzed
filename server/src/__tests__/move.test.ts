@@ -142,9 +142,9 @@ describe("stepPlayer (one 50 ms tick, sim-state)", () => {
 
   it("does not mutate the input sim", () => {
     const g = makeGrid(10, 10);
-    const before = sim(80, 80);
+    const before = sim(80, 80, { rollCooldownTicks: 5, rollDirMask: 8 });
     stepPlayer(g, before, { ...IDLE_SIM, right: true });
-    expect(before.x).toBe(80);
+    expect(before).toEqual(sim(80, 80, { rollCooldownTicks: 5, rollDirMask: 8 }));
   });
 });
 

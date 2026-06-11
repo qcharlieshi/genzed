@@ -136,12 +136,8 @@ export class ArenaRoom extends Room<ArenaState> {
       for (const input of batch) {
         if (input.seq <= player.lastProcessedInput) continue; // dup/replay guard
         const r = stepPlayer(this.grid, this.simFromPlayer(player), input);
-        player.x = r.sim.x;
-        player.y = r.sim.y;
-        player.dir = r.sim.dir;
-        player.rollTicksLeft = r.sim.rollTicksLeft;
-        player.rollDirMask = r.sim.rollDirMask;
-        player.rollCooldownTicks = r.sim.rollCooldownTicks;
+        // every PlayerSim field maps 1:1 onto schema fields — assign covers future sim fields too
+        Object.assign(player, r.sim);
         player.vx = r.vx;
         player.vy = r.vy;
         player.lastProcessedInput = input.seq;
