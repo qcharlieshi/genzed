@@ -20,6 +20,8 @@ import {
   SPAWN_POINTS,
   DIR_DOWN,
   PLAYER_HEALTH,
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
   gunForLevel,
   stepPlayer,
   type InputMessage,
@@ -87,8 +89,10 @@ function isFireMessage(m: unknown): m is FireMessage {
   return (
     typeof o.tx === "number" &&
     Number.isFinite(o.tx) &&
+    Math.abs(o.tx) <= WORLD_WIDTH * 2 &&
     typeof o.ty === "number" &&
-    Number.isFinite(o.ty)
+    Number.isFinite(o.ty) &&
+    Math.abs(o.ty) <= WORLD_HEIGHT * 2
   );
 }
 
@@ -282,8 +286,9 @@ export class ArenaRoom extends Room<ArenaState> {
     if (!player || !meta) return;
     if (player.rollTicksLeft > 0) return;
     if (player.reloadStartedAt === 0 || meta.activeReloadUsed) return;
-    meta.activeReloadUsed = true;
     const now = Date.now();
+    if (now >= meta.reloadCompleteAt) return; // reload already done; tick will clear it
+    meta.activeReloadUsed = true;
     const elapsed = now - player.reloadStartedAt;
     const [lo, hi] = ACTIVE_RELOAD_WINDOW_MS;
     let result: ReloadResultEvent;
