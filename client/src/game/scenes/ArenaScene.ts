@@ -31,6 +31,9 @@ type PlayerView = {
 
 type ArenaDebugHook = {
   players: () => Array<{ id: string; x: number; y: number; local: boolean }>;
+  // Consented leave so E2E teardown doesn't trip the 10s reconnection grace
+  // (a closed browser context is a non-consented leave and keeps the room alive).
+  leave: () => void;
 };
 
 const MAP_KEY = "arena-map";
@@ -116,6 +119,7 @@ export class ArenaScene extends Phaser.Scene {
           y: view.sprite.y,
           local: id === this.localSessionId,
         })),
+      leave: () => void this.room.leave(true),
     };
   }
 
