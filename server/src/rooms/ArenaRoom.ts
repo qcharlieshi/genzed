@@ -1,4 +1,4 @@
-import { Room, ServerError, type Client } from "@colyseus/core";
+import { Room, ServerError, type Client, type Delayed } from "@colyseus/core";
 import {
   CODE_GAME_IN_PROGRESS,
   CODE_LOBBY_FULL,
@@ -123,6 +123,7 @@ export class ArenaRoom extends Room<ArenaState> {
   override maxClients = 100;
 
   private countdownInterval: ReturnType<typeof setInterval> | null = null;
+  private winTimer: Delayed | null = null;
   private inputQueues = new Map<string, InputMessage[]>();
   private grid = loadSolidityGrid();
   private bulletGrid = loadBulletGrid();
@@ -242,7 +243,10 @@ export class ArenaRoom extends Room<ArenaState> {
       targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now });
     });
     const hits = stepBullets(this.bulletGrid, this.state.bullets, this.bulletMeta, targets, this.state.tick);
-    for (const hit of hits) this.resolveHit(hit, now);
+    for (const hit of hits) {
+      if (this.state.phase !== "playing") break; // a hit in this batch just ended the game
+      this.resolveHit(hit, now);
+    }
   }
 
   private handleFire(client: Client, message: unknown): void {
@@ -454,12 +458,14 @@ export class ArenaRoom extends Room<ArenaState> {
     this.broadcastLog("win", `${winner.name} has won the game!`);
     this.state.bullets.clear();
     this.bulletMeta.clear();
-    this.clock.setTimeout(() => {
+    this.winTimer = this.clock.setTimeout(() => {
       if (this.state.phase === "ended") this.resetToLobby();
     }, WIN_BANNER_MS);
   }
 
   private resetToLobby(): void {
+    this.winTimer?.clear();
+    this.winTimer = null;
     this.state.phase = "lobby";
     this.state.countdownMs = 0;
     this.state.winnerName = "";

@@ -70,9 +70,11 @@ describe("stepBullets", () => {
     const m = meta.get("b1");
     if (!m) throw new Error("meta missing");
     m.diesAtTick = 1; // spawnTick 0 + 1 tick of life
-    const hits = stepBullets(makeGrid(35, 35), bullets, meta, [], 1);
-    expect(hits).toEqual([]);
-    expect(bullets.size).toBe(0); // moved its 10 px, then expired
+    // A target 5 px ahead: the bullet must move (and hit) before expiring.
+    const target: Target = { id: "v", x: 85, y: 80, immune: false };
+    const hits = stepBullets(makeGrid(35, 35), bullets, meta, [target], 1);
+    expect(hits).toEqual([{ victimId: "v", shooterId: "s", damage: 10 }]);
+    expect(bullets.size).toBe(0);
   });
 
   it("dies leaving the world", () => {

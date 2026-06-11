@@ -27,8 +27,10 @@ const HH = PLAYER_H / 2;
 
 // Substepped point integration: ≤16 px per sample means neither a 32 px tile
 // nor a 16×20 player AABB can be skipped at any gun's speed (sniper = 50
-// px/tick). Bullets collide with the BULLET grid (wallCollision only) and with
-// player AABBs; the shooter and immune players are transparent.
+// px/tick) — no crossing deeper than one substep (≤16 px) can be skipped —
+// shallow corner grazes may pass, which reads as a near-miss. Bullets collide
+// with the BULLET grid (wallCollision only) and with player AABBs; the shooter
+// and immune players are transparent.
 export function stepBullets(
   grid: SolidityGrid,
   bullets: MapSchema<Bullet>,
