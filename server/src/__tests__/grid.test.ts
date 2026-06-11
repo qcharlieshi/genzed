@@ -52,4 +52,11 @@ describe("buildSolidityGrid (real arena map)", () => {
       }
     }
   });
+
+  it("builds the bullet grid from wallCollision only (285 tiles)", () => {
+    const bulletGrid = buildSolidityGrid(mapJson, ["wallCollision"]);
+    let count = 0;
+    for (const v of bulletGrid.solid) count += v;
+    expect(count).toBe(285); // vs 411 in the player grid — bullets fly over litWall/water
+  });
 });

@@ -8,7 +8,9 @@ import {
   MSG_FIRE,
   MSG_RELOAD,
   MSG_ACTIVE_RELOAD,
+  MSG_DEV_TELEPORT,
   EVT_SHOT,
+  EVT_LOG,
   EVT_RELOAD_RESULT,
   WIN_GUN_LEVEL,
   RELOAD_MS,
@@ -16,6 +18,9 @@ import {
   ACTIVE_RELOAD_WINDOW_MS,
   ACTIVE_RELOAD_DAMAGE_BONUS,
   ACTIVE_RELOAD_BONUS_MS,
+  RESPAWN_IMMUNITY_MS,
+  GUN_L5_SPEED_BONUS,
+  WIN_BANNER_MS,
   TICK_MS,
   SPAWN_POINTS,
   DIR_DOWN,
@@ -29,10 +34,13 @@ import {
   type FireMessage,
   type ShotEvent,
   type ReloadResultEvent,
+  type DevTeleportMessage,
+  type LogEvent,
+  type LogKind,
 } from "@genzed/shared";
 import { ArenaState, Player, Bullet } from "../schema/ArenaState.js";
-import { loadSolidityGrid } from "../sim/collision.js";
-import { type BulletMeta } from "../sim/bullets.js";
+import { loadSolidityGrid, loadBulletGrid } from "../sim/collision.js";
+import { stepBullets, type BulletMeta, type Hit, type Target } from "../sim/bullets.js";
 
 const MAX_CLIENTS = 4;
 const MIN_TO_START = 2;
@@ -83,6 +91,19 @@ function freshCombatMeta(): CombatMeta {
   };
 }
 
+const PLACES = ["1st", "2nd", "3rd", "4th"] as const;
+
+function isDevTeleportMessage(m: unknown): m is DevTeleportMessage {
+  if (typeof m !== "object" || m === null) return false;
+  const o = m as Record<string, unknown>;
+  return (
+    typeof o.x === "number" &&
+    Number.isFinite(o.x) &&
+    typeof o.y === "number" &&
+    Number.isFinite(o.y)
+  );
+}
+
 function isFireMessage(m: unknown): m is FireMessage {
   if (typeof m !== "object" || m === null) return false;
   const o = m as Record<string, unknown>;
@@ -104,6 +125,7 @@ export class ArenaRoom extends Room<ArenaState> {
   private countdownInterval: ReturnType<typeof setInterval> | null = null;
   private inputQueues = new Map<string, InputMessage[]>();
   private grid = loadSolidityGrid();
+  private bulletGrid = loadBulletGrid();
   private combat = new Map<string, CombatMeta>();
   private bulletMeta = new Map<string, BulletMeta>();
 
@@ -115,6 +137,7 @@ export class ArenaRoom extends Room<ArenaState> {
     this.onMessage(MSG_FIRE, (client, message: unknown) => this.handleFire(client, message));
     this.onMessage(MSG_RELOAD, (client) => this.handleReload(client));
     this.onMessage(MSG_ACTIVE_RELOAD, (client) => this.handleActiveReload(client));
+    this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) => this.handleDevTeleport(client, message));
     this.setSimulationInterval(() => this.tick(), TICK_MS);
   }
 
@@ -213,6 +236,13 @@ export class ArenaRoom extends Room<ArenaState> {
         player.reloadStartedAt = 0;
       }
     });
+    // 2. Bullets: substepped integration vs bullet grid + player AABBs.
+    const targets: Target[] = [];
+    this.state.players.forEach((p, id) => {
+      targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now });
+    });
+    const hits = stepBullets(this.bulletGrid, this.state.bullets, this.bulletMeta, targets, this.state.tick);
+    for (const hit of hits) this.resolveHit(hit, now);
   }
 
   private handleFire(client: Client, message: unknown): void {
@@ -332,6 +362,7 @@ export class ArenaRoom extends Room<ArenaState> {
     this.state.winnerName = "";
     this.combat.forEach((_meta, sessionId) => this.combat.set(sessionId, freshCombatMeta()));
     this.bulletMeta.clear();
+    this.announceRankChanges(false);
   }
 
   private handleStartGame(_client: Client): void {
@@ -355,14 +386,102 @@ export class ArenaRoom extends Room<ArenaState> {
   }
 
   private handleEndGame(_client: Client): void {
-    if (this.state.phase !== "playing") return;
+    if (this.state.phase !== "playing" && this.state.phase !== "ended") return;
+    this.resetToLobby();
+  }
+
+  private broadcastLog(kind: LogKind, text: string): void {
+    const log: LogEvent = { kind, text };
+    this.broadcast(EVT_LOG, log);
+  }
+
+  private resolveHit(hit: Hit, now: number): void {
+    const victim = this.state.players.get(hit.victimId);
+    if (!victim) return;
+    if (victim.immuneUntil > now) return; // killed-and-respawned earlier this same tick
+    victim.hp = Math.max(0, victim.hp - hit.damage);
+    if (victim.hp > 0) return;
+    const shooter = this.state.players.get(hit.shooterId);
+    this.broadcastLog("slain", `${shooter?.name ?? "?"} has slain ${victim.name}`);
+    this.respawn(victim, now);
+    if (!shooter || shooter.gunLevel >= WIN_GUN_LEVEL) return;
+    shooter.gunLevel += 1;
+    if (shooter.gunLevel >= WIN_GUN_LEVEL) {
+      this.handleWin(shooter);
+      return;
+    }
+    const gun = gunForLevel(shooter.gunLevel);
+    shooter.ammo = gun.clip;
+    shooter.reloadStartedAt = 0; // new gun arrives loaded
+    shooter.speedBonus = shooter.gunLevel === 5 ? GUN_L5_SPEED_BONUS : 0;
+    this.broadcastLog("levelup", `${shooter.name} has advanced to Gun Level: ${shooter.gunLevel}`);
+    this.announceRankChanges(true);
+  }
+
+  private respawn(player: Player, now: number): void {
+    const p = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+    if (!p) return; // noUncheckedIndexedAccess; unreachable (non-empty table)
+    player.x = p.x;
+    player.y = p.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.hp = PLAYER_HEALTH;
+    player.immuneUntil = now + RESPAWN_IMMUNITY_MS;
+    player.rollTicksLeft = 0;
+    player.rollDirMask = 0;
+    player.rollCooldownTicks = 0;
+    // lastProcessedInput is NOT reset — the replay-guard watermark must survive.
+  }
+
+  // Deviation 8: announce the player whose rank improved, by name.
+  private announceRankChanges(announce: boolean): void {
+    const order: Array<[string, Player]> = [];
+    this.state.players.forEach((p, id) => order.push([id, p]));
+    order.sort(([, a], [, b]) => b.gunLevel - a.gunLevel || a.joinedAt - b.joinedAt);
+    order.forEach(([sessionId, player], rank) => {
+      const meta = this.combat.get(sessionId);
+      if (!meta) return;
+      if (announce && rank < meta.prevRank) {
+        this.broadcastLog("rank", `${player.name} has taken ${PLACES[rank] ?? `${rank + 1}th`} place`);
+      }
+      meta.prevRank = rank;
+    });
+  }
+
+  private handleWin(winner: Player): void {
+    this.state.winnerName = winner.name;
+    this.state.phase = "ended";
+    this.broadcastLog("win", `${winner.name} has won the game!`);
+    this.state.bullets.clear();
+    this.bulletMeta.clear();
+    this.clock.setTimeout(() => {
+      if (this.state.phase === "ended") this.resetToLobby();
+    }, WIN_BANNER_MS);
+  }
+
+  private resetToLobby(): void {
     this.state.phase = "lobby";
     this.state.countdownMs = 0;
+    this.state.winnerName = "";
+    this.state.bullets.clear();
+    this.bulletMeta.clear();
     this.inputQueues.forEach((queue) => {
       queue.length = 0;
     });
     this.state.players.forEach((player) => {
       player.ready = false;
     });
+  }
+
+  private handleDevTeleport(client: Client, message: unknown): void {
+    if (this.state.phase !== "playing") return;
+    if (!isDevTeleportMessage(message)) return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    player.x = message.x;
+    player.y = message.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.rollTicksLeft = 0;
   }
 }

@@ -22,11 +22,16 @@ export type SolidityGrid = {
   solid: Uint8Array; // 1 = blocked, row-major [ty * width + tx]
 };
 
-export function buildSolidityGrid(map: TiledMapJson): SolidityGrid {
+// layerNames: include exactly these tile layers (bullet grid = ["wallCollision"]).
+// Omitted: include every layer flagged `collision: "true"` (the player grid).
+export function buildSolidityGrid(map: TiledMapJson, layerNames?: readonly string[]): SolidityGrid {
   const solid = new Uint8Array(map.width * map.height);
   for (const layer of map.layers) {
     if (layer.type !== "tilelayer" || !layer.data) continue;
-    if (layer.properties?.collision !== "true") continue;
+    const include = layerNames
+      ? layerNames.includes(layer.name)
+      : layer.properties?.collision === "true";
+    if (!include) continue;
     for (let i = 0; i < layer.data.length; i += 1) {
       if ((layer.data[i] ?? 0) !== 0) solid[i] = 1; // ?? for noUncheckedIndexedAccess
     }

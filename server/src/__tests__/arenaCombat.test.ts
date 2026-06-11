@@ -8,9 +8,17 @@ import {
   MSG_FIRE,
   MSG_RELOAD,
   MSG_ACTIVE_RELOAD,
+  MSG_DEV_TELEPORT,
+  MSG_END_GAME,
   EVT_RELOAD_RESULT,
+  EVT_LOG,
+  EVT_SHOT,
   RELOAD_MS,
+  SPAWN_POINTS,
+  GUN_L5_SPEED_BONUS,
   type ReloadResultEvent,
+  type LogEvent,
+  type ShotEvent,
 } from "@genzed/shared";
 
 let colyseus: ColyseusTestServer;
@@ -171,5 +179,105 @@ describe("reload + active reload", () => {
     await sleep(150);
     expect(p1.ammo).toBe(3); // no refill
     expect(p1.reloadStartedAt).toBeGreaterThan(0);
+  }, 10_000);
+});
+
+describe("kills, respawn, win FSM", () => {
+  it("a hit drops hp by the gun's damage", async () => {
+    const { c2, p1, p2 } = await startedGame();
+    p2.x = 384;
+    p2.y = 416;
+    p1.x = 224;
+    p1.y = 704; // verified LoS pair on the bullet grid
+    c2.send(MSG_FIRE, { tx: 224, ty: 704 });
+    await sleep(1200); // ~329 px at 500 px/s ≈ 660 ms + tick slack
+    expect(p1.hp).toBe(90);
+  }, 10_000);
+
+  it("a kill respawns the victim, credits the shooter, and announces all three lines", async () => {
+    const { room, c1, c2, p1, p2 } = await startedGame();
+    const logs: LogEvent[] = [];
+    const shots: ShotEvent[] = [];
+    c1.onMessage(EVT_LOG, (m: LogEvent) => logs.push(m));
+    c1.onMessage(EVT_SHOT, (m: ShotEvent) => shots.push(m));
+    p2.x = 384;
+    p2.y = 416;
+    p1.x = 224;
+    p1.y = 704;
+    p1.hp = 10; // one pistol hit kills
+    c2.send(MSG_FIRE, { tx: 224, ty: 704 });
+    await sleep(1200);
+    // Victim: teleported to a spawn point, full hp, immune.
+    expect(p1.hp).toBe(100);
+    const spawnSet = new Set(SPAWN_POINTS.map((s) => `${s.x},${s.y}`));
+    expect(spawnSet.has(`${p1.x},${p1.y}`)).toBe(true);
+    expect(p1.immuneUntil).toBeGreaterThan(0);
+    // Shooter: leveled up, clip reset to the SMG's.
+    expect(p2.gunLevel).toBe(2);
+    expect(p2.ammo).toBe(30);
+    // Feed lines (legacy strings) + the shot broadcast reached the other client.
+    expect(shots).toHaveLength(1);
+    expect(shots[0]?.shooterId).toBe(c2.sessionId);
+    expect(logs.some((l) => l.kind === "slain" && l.text === "b has slain a")).toBe(true);
+    expect(logs.some((l) => l.kind === "levelup" && l.text === "b has advanced to Gun Level: 2")).toBe(true);
+    expect(logs.some((l) => l.kind === "rank" && l.text === "b has taken 1st place")).toBe(true);
+    expect(room.state.bullets.size).toBe(0); // consumed by the hit
+  }, 10_000);
+
+  it("immunity blocks damage", async () => {
+    const { c2, p1, p2 } = await startedGame();
+    p2.x = 384;
+    p2.y = 416;
+    p1.x = 224;
+    p1.y = 704;
+    p1.hp = 50;
+    p1.immuneUntil = Date.now() + 5000;
+    c2.send(MSG_FIRE, { tx: 224, ty: 704 });
+    await sleep(1200);
+    expect(p1.hp).toBe(50);
+  }, 10_000);
+
+  it("L5 grants the speed bonus; level 6 wins, ends the phase, and dev end_game resets", async () => {
+    const { room, c1, c2, p1, p2 } = await startedGame();
+    const logs: LogEvent[] = [];
+    c1.onMessage(EVT_LOG, (m: LogEvent) => logs.push(m));
+    p2.gunLevel = 4;
+    p2.x = 384;
+    p2.y = 416;
+    p1.x = 224;
+    p1.y = 704;
+    p1.hp = 10;
+    c2.send(MSG_FIRE, { tx: 224, ty: 704 }); // heavy: 200 px/s → ~1.65 s flight
+    await sleep(2200);
+    expect(p2.gunLevel).toBe(5);
+    expect(p2.speedBonus).toBe(GUN_L5_SPEED_BONUS);
+    expect(p2.ammo).toBe(-1); // melee ∞ clip
+    // Second kill needs point-blank range (L5 bullets live ~10 px). The victim
+    // respawned mid-sleep, so its 1 s immunity may still be running — clear it
+    // (direct server-side write, same as the other fixtures).
+    p1.x = p2.x + 8;
+    p1.y = p2.y;
+    p1.hp = 10;
+    p1.immuneUntil = 0;
+    c2.send(MSG_FIRE, { tx: p1.x, ty: p1.y });
+    await sleep(400);
+    expect(p2.gunLevel).toBe(6);
+    expect(room.state.phase).toBe("ended");
+    expect(room.state.winnerName).toBe("b");
+    expect(room.state.bullets.size).toBe(0);
+    expect(logs.some((l) => l.kind === "win" && l.text === "b has won the game!")).toBe(true);
+    // Dev end_game skips the 10 s banner (works from "ended" too).
+    c2.send(MSG_END_GAME);
+    await sleep(150);
+    expect(room.state.phase).toBe("lobby");
+    expect(room.state.winnerName).toBe("");
+  }, 15_000);
+
+  it("dev teleport moves the sender (E2E seam)", async () => {
+    const { c1, p1 } = await startedGame();
+    c1.send(MSG_DEV_TELEPORT, { x: 384, y: 416 });
+    await sleep(150);
+    expect(p1.x).toBe(384);
+    expect(p1.y).toBe(416);
   }, 10_000);
 });
