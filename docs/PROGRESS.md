@@ -8,6 +8,7 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 - **Stage 2 plan:** [docs/superpowers/plans/2026-06-04-stage2-lobby.md](superpowers/plans/2026-06-04-stage2-lobby.md)
 - **Stage 3 spec:** [docs/superpowers/specs/2026-06-10-stage3-movement-design.md](superpowers/specs/2026-06-10-stage3-movement-design.md)
 - **Stage 3 plan:** [docs/superpowers/plans/2026-06-10-stage3-movement.md](superpowers/plans/2026-06-10-stage3-movement.md)
+- **Stage 4 spec:** [docs/superpowers/specs/2026-06-11-stage4-combat-design.md](superpowers/specs/2026-06-11-stage4-combat-design.md)
 
 ## Direction (settled during brainstorming)
 
