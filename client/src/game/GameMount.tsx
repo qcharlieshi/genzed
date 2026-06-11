@@ -19,6 +19,7 @@ export function GameMount(): JSX.Element {
       width: 800,
       height: 600,
       backgroundColor: "#000000",
+      pixelArt: true,
       scene: [scene],
     });
     game.scene.start("arena", { room, localSessionId: sessionId });
