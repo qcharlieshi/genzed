@@ -5,6 +5,17 @@ import {
   MSG_END_GAME,
   MSG_INPUT,
   MSG_START_GAME,
+  MSG_FIRE,
+  MSG_RELOAD,
+  MSG_ACTIVE_RELOAD,
+  EVT_SHOT,
+  EVT_RELOAD_RESULT,
+  WIN_GUN_LEVEL,
+  RELOAD_MS,
+  RELOAD_JAM_TOTAL_MS,
+  ACTIVE_RELOAD_WINDOW_MS,
+  ACTIVE_RELOAD_DAMAGE_BONUS,
+  ACTIVE_RELOAD_BONUS_MS,
   TICK_MS,
   SPAWN_POINTS,
   DIR_DOWN,
@@ -13,9 +24,13 @@ import {
   stepPlayer,
   type InputMessage,
   type PlayerSim,
+  type FireMessage,
+  type ShotEvent,
+  type ReloadResultEvent,
 } from "@genzed/shared";
-import { ArenaState, Player } from "../schema/ArenaState.js";
+import { ArenaState, Player, Bullet } from "../schema/ArenaState.js";
 import { loadSolidityGrid } from "../sim/collision.js";
+import { type BulletMeta } from "../sim/bullets.js";
 
 const MAX_CLIENTS = 4;
 const MIN_TO_START = 2;
@@ -46,6 +61,37 @@ function isInputMessage(m: unknown): m is InputMessage {
   );
 }
 
+type CombatMeta = {
+  nextFireAt: number;
+  reloadCompleteAt: number;
+  activeReloadUsed: boolean;
+  damageBonusUntil: number;
+  bulletCounter: number;
+  prevRank: number; // rank-change feed lines (Task 7)
+};
+
+function freshCombatMeta(): CombatMeta {
+  return {
+    nextFireAt: 0,
+    reloadCompleteAt: 0,
+    activeReloadUsed: false,
+    damageBonusUntil: 0,
+    bulletCounter: 0,
+    prevRank: 0,
+  };
+}
+
+function isFireMessage(m: unknown): m is FireMessage {
+  if (typeof m !== "object" || m === null) return false;
+  const o = m as Record<string, unknown>;
+  return (
+    typeof o.tx === "number" &&
+    Number.isFinite(o.tx) &&
+    typeof o.ty === "number" &&
+    Number.isFinite(o.ty)
+  );
+}
+
 export class ArenaRoom extends Room<ArenaState> {
   // Set higher than MAX_CLIENTS so seat reservation always succeeds and
   // onAuth is the gating point for the 4-player cap (code 4003).
@@ -54,12 +100,17 @@ export class ArenaRoom extends Room<ArenaState> {
   private countdownInterval: ReturnType<typeof setInterval> | null = null;
   private inputQueues = new Map<string, InputMessage[]>();
   private grid = loadSolidityGrid();
+  private combat = new Map<string, CombatMeta>();
+  private bulletMeta = new Map<string, BulletMeta>();
 
   override onCreate(): void {
     this.setState(new ArenaState());
     this.onMessage(MSG_START_GAME, (client) => this.handleStartGame(client));
     this.onMessage(MSG_END_GAME, (client) => this.handleEndGame(client));
     this.onMessage(MSG_INPUT, (client, message: unknown) => this.handleInput(client, message));
+    this.onMessage(MSG_FIRE, (client, message: unknown) => this.handleFire(client, message));
+    this.onMessage(MSG_RELOAD, (client) => this.handleReload(client));
+    this.onMessage(MSG_ACTIVE_RELOAD, (client) => this.handleActiveReload(client));
     this.setSimulationInterval(() => this.tick(), TICK_MS);
   }
 
@@ -80,6 +131,7 @@ export class ArenaRoom extends Room<ArenaState> {
     player.joinedAt = Date.now();
     this.state.players.set(client.sessionId, player);
     this.inputQueues.set(client.sessionId, []);
+    this.combat.set(client.sessionId, freshCombatMeta());
   }
 
   override async onLeave(client: Client, consented: boolean): Promise<void> {
@@ -105,6 +157,7 @@ export class ArenaRoom extends Room<ArenaState> {
   private removePlayer(sessionId: string): void {
     this.state.players.delete(sessionId);
     this.inputQueues.delete(sessionId);
+    this.combat.delete(sessionId);
   }
 
   private handleInput(client: Client, message: unknown): void {
@@ -147,6 +200,103 @@ export class ArenaRoom extends Room<ArenaState> {
         player.aimAngle = input.aimAngle;
       }
     });
+    const now = Date.now();
+    this.state.players.forEach((player, sessionId) => {
+      const meta = this.combat.get(sessionId);
+      if (!meta) return;
+      if (player.reloadStartedAt > 0 && now >= meta.reloadCompleteAt) {
+        player.ammo = gunForLevel(player.gunLevel).clip;
+        player.reloadStartedAt = 0;
+      }
+    });
+  }
+
+  private handleFire(client: Client, message: unknown): void {
+    if (this.state.phase !== "playing") return;
+    if (!isFireMessage(message)) return;
+    const player = this.state.players.get(client.sessionId);
+    const meta = this.combat.get(client.sessionId);
+    if (!player || !meta) return;
+    if (player.gunLevel >= WIN_GUN_LEVEL) return;
+    if (player.rollTicksLeft > 0) return; // fire input ignored mid-roll
+    if (player.reloadStartedAt > 0) return;
+    const now = Date.now();
+    if (now < meta.nextFireAt) return;
+    if (player.ammo === 0) {
+      this.beginReload(player, meta, now); // legacy: dry fire auto-reloads
+      return;
+    }
+    const gun = gunForLevel(player.gunLevel);
+    // Velocity from the AUTHORITATIVE position toward the requested point —
+    // bullets converge on the point (legacy gun.js:95), one spawn at player center.
+    const dx = message.tx - player.x;
+    const dy = message.ty - player.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1) return;
+    const bullet = new Bullet();
+    bullet.x = player.x;
+    bullet.y = player.y;
+    bullet.vx = (dx / d) * gun.bulletSpeed;
+    bullet.vy = (dy / d) * gun.bulletSpeed;
+    bullet.level = player.gunLevel;
+    bullet.spawnTick = this.state.tick;
+    const id = `${client.sessionId}:${meta.bulletCounter}`;
+    meta.bulletCounter += 1;
+    this.state.bullets.set(id, bullet);
+    this.bulletMeta.set(id, {
+      shooterId: client.sessionId,
+      damage: gun.damage + (now < meta.damageBonusUntil ? ACTIVE_RELOAD_DAMAGE_BONUS : 0),
+      diesAtTick:
+        gun.bulletLifetimeMs > 0
+          ? this.state.tick + Math.max(1, Math.round(gun.bulletLifetimeMs / TICK_MS))
+          : Number.MAX_SAFE_INTEGER,
+    });
+    if (player.ammo > 0) player.ammo -= 1; // -1 encodes ∞ (L5)
+    meta.nextFireAt = now + gun.fireIntervalMs;
+    const shot: ShotEvent = { shooterId: client.sessionId, level: player.gunLevel, x: player.x, y: player.y };
+    this.broadcast(EVT_SHOT, shot);
+  }
+
+  private beginReload(player: Player, meta: CombatMeta, now: number): void {
+    if (player.reloadStartedAt > 0) return;
+    const gun = gunForLevel(player.gunLevel);
+    if (gun.clip === -1 || player.ammo === gun.clip) return;
+    player.reloadStartedAt = now;
+    meta.reloadCompleteAt = now + RELOAD_MS;
+    meta.activeReloadUsed = false;
+  }
+
+  private handleReload(client: Client): void {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    const meta = this.combat.get(client.sessionId);
+    if (!player || !meta) return;
+    if (player.rollTicksLeft > 0) return; // reload input ignored mid-roll
+    this.beginReload(player, meta, Date.now());
+  }
+
+  private handleActiveReload(client: Client): void {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    const meta = this.combat.get(client.sessionId);
+    if (!player || !meta) return;
+    if (player.rollTicksLeft > 0) return;
+    if (player.reloadStartedAt === 0 || meta.activeReloadUsed) return;
+    meta.activeReloadUsed = true;
+    const now = Date.now();
+    const elapsed = now - player.reloadStartedAt;
+    const [lo, hi] = ACTIVE_RELOAD_WINDOW_MS;
+    let result: ReloadResultEvent;
+    if (elapsed >= lo && elapsed <= hi) {
+      player.ammo = gunForLevel(player.gunLevel).clip;
+      player.reloadStartedAt = 0;
+      meta.damageBonusUntil = now + ACTIVE_RELOAD_BONUS_MS;
+      result = { ok: true };
+    } else {
+      meta.reloadCompleteAt = now + RELOAD_JAM_TOTAL_MS; // jam pushes completion out
+      result = { ok: false };
+    }
+    client.send(EVT_RELOAD_RESULT, result);
   }
 
   private assignSpawns(): void {
@@ -175,6 +325,8 @@ export class ArenaRoom extends Room<ArenaState> {
     });
     this.state.bullets.clear();
     this.state.winnerName = "";
+    this.combat.forEach((_meta, sessionId) => this.combat.set(sessionId, freshCombatMeta()));
+    this.bulletMeta.clear();
   }
 
   private handleStartGame(_client: Client): void {
