@@ -145,6 +145,7 @@ export class ArenaScene extends Phaser.Scene {
   private prevOwnHp = PLAYER_HEALTH;
   private prevGunLevel = 0;
   private bannerShown = false;
+  private prevChatOpen = false;
 
   constructor() {
     super("arena");
@@ -393,19 +394,38 @@ export class ArenaScene extends Phaser.Scene {
 
   private sampleInput(): void {
     if (!this.prediction) return;
-    const input: SimInput = {
-      up: this.keys.W.isDown,
-      down: this.keys.S.isDown,
-      left: this.keys.A.isDown,
-      right: this.keys.D.isDown,
-      roll: Phaser.Input.Keyboard.JustDown(this.keys.SPACE),
-    };
-    const pointer = this.input.activePointer;
-    pointer.updateWorldPoint(this.cameras.main);
-    this.localAimAngle = Math.atan2(pointer.worldY - this.prediction.y, pointer.worldX - this.prediction.x);
+    const chatOpen = Boolean((window as unknown as { __chatOpen?: boolean }).__chatOpen);
+    if (chatOpen !== this.prevChatOpen) {
+      const kb = this.input.keyboard;
+      if (kb) {
+        // Phaser's key captures preventDefault W/A/S/D/SPACE/R keydowns, which
+        // would swallow typing; release them while the box is open.
+        if (chatOpen) kb.disableGlobalCapture();
+        else {
+          kb.enableGlobalCapture();
+          kb.resetKeys(); // drop JustDown latches typed into the chat box
+        }
+      }
+      this.prevChatOpen = chatOpen;
+    }
+    const input: SimInput = chatOpen
+      ? { up: false, down: false, left: false, right: false, roll: false }
+      : {
+          up: this.keys.W.isDown,
+          down: this.keys.S.isDown,
+          left: this.keys.A.isDown,
+          right: this.keys.D.isDown,
+          roll: Phaser.Input.Keyboard.JustDown(this.keys.SPACE),
+        };
+    if (!chatOpen) {
+      const pointer = this.input.activePointer;
+      pointer.updateWorldPoint(this.cameras.main);
+      this.localAimAngle = Math.atan2(pointer.worldY - this.prediction.y, pointer.worldX - this.prediction.x);
+    }
     const msg = this.prediction.sample(input, this.localAimAngle);
     this.room.send(MSG_INPUT, msg);
     this.updateLocalAnimation(input);
+    if (chatOpen) return; // typing: no reload/active-reload, no firing
 
     const me = this.room.state.players.get(this.localSessionId);
     if (!me) return;
@@ -416,6 +436,7 @@ export class ArenaScene extends Phaser.Scene {
     }
 
     // Full-auto while held, self-gated at the gun's interval (server re-gates).
+    const pointer = this.input.activePointer;
     if (pointer.isDown && performance.now() >= this.nextFireAt) {
       this.room.send(MSG_FIRE, { tx: pointer.worldX, ty: pointer.worldY });
       this.nextFireAt = performance.now() + gunForLevel(me.gunLevel).fireIntervalMs;

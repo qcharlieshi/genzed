@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import Phaser from "phaser";
 import { useRoom } from "../lobby/RoomContext.js";
 import { ArenaScene } from "./scenes/ArenaScene.js";
+import { ChatOverlay } from "./ChatOverlay.js";
 
 export function GameMount(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -31,7 +32,10 @@ export function GameMount(): JSX.Element {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-black">
-      <div ref={containerRef} className="h-[600px] w-[800px]" />
+      <div className="relative h-[600px] w-[800px]">
+        <div ref={containerRef} className="h-full w-full" />
+        <ChatOverlay />
+      </div>
     </div>
   );
 }
