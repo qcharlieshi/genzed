@@ -12,6 +12,9 @@ import {
   EVT_SHOT,
   EVT_LOG,
   EVT_RELOAD_RESULT,
+  EVT_ZOMBIE_ATTACK,
+  MSG_DEV_ZOMBIE_SPAWNING,
+  MSG_DEV_SPAWN_ZOMBIE,
   WIN_GUN_LEVEL,
   RELOAD_MS,
   RELOAD_JAM_TOTAL_MS,
@@ -27,6 +30,9 @@ import {
   PLAYER_HEALTH,
   WORLD_WIDTH,
   WORLD_HEIGHT,
+  ZOMBIE_SPAWN_INTERVAL_MS,
+  ZOMBIE_MAX_ALIVE,
+  ZOMBIE_SPAWN_POINTS,
   gunForLevel,
   stepPlayer,
   type InputMessage,
@@ -37,10 +43,13 @@ import {
   type DevTeleportMessage,
   type LogEvent,
   type LogKind,
+  type ZombieAttackEvent,
+  type DevZombieSpawningMessage,
 } from "@genzed/shared";
-import { ArenaState, Player, Bullet } from "../schema/ArenaState.js";
+import { ArenaState, Player, Bullet, Zombie } from "../schema/ArenaState.js";
 import { loadSolidityGrid, loadBulletGrid } from "../sim/collision.js";
 import { stepBullets, type BulletMeta, type Hit, type Target } from "../sim/bullets.js";
+import { stepZombies, type ZombieMeta } from "../sim/zombies.js";
 
 const MAX_CLIENTS = 4;
 const MIN_TO_START = 2;
@@ -52,6 +61,7 @@ const MAX_QUEUED_INPUTS = 10;
 // jitter; capping it stops an input flood from becoming a speed cheat (a full
 // 10-deep drain per 50 ms tick would be 10x movement speed).
 const MAX_INPUTS_PER_TICK = 2;
+const ZOMBIE_SPAWN_TICKS = ZOMBIE_SPAWN_INTERVAL_MS / TICK_MS; // 80 ticks = 4 s
 
 function isInputMessage(m: unknown): m is InputMessage {
   if (typeof m !== "object" || m === null) return false;
@@ -104,6 +114,11 @@ function isDevTeleportMessage(m: unknown): m is DevTeleportMessage {
   );
 }
 
+function isDevZombieSpawningMessage(m: unknown): m is DevZombieSpawningMessage {
+  if (typeof m !== "object" || m === null) return false;
+  return typeof (m as Record<string, unknown>).enabled === "boolean";
+}
+
 function isFireMessage(m: unknown): m is FireMessage {
   if (typeof m !== "object" || m === null) return false;
   const o = m as Record<string, unknown>;
@@ -129,6 +144,10 @@ export class ArenaRoom extends Room<ArenaState> {
   private bulletGrid = loadBulletGrid();
   private combat = new Map<string, CombatMeta>();
   private bulletMeta = new Map<string, BulletMeta>();
+  private zombieMeta = new Map<string, ZombieMeta>();
+  private zombieCounter = 0;
+  private zombieSpawning = true; // dev seam can disable for E2E determinism
+  private nextZombieSpawnTick = 0; // anchored at game start (state.tick never resets)
 
   override onCreate(): void {
     this.setState(new ArenaState());
@@ -142,6 +161,19 @@ export class ArenaRoom extends Room<ArenaState> {
       this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) =>
         this.handleDevTeleport(client, message),
       );
+      this.onMessage(MSG_DEV_ZOMBIE_SPAWNING, (_client, message: unknown) => {
+        if (!isDevZombieSpawningMessage(message)) return;
+        this.zombieSpawning = message.enabled;
+        if (!message.enabled) {
+          this.state.zombies.clear();
+          this.zombieMeta.clear();
+        }
+      });
+      this.onMessage(MSG_DEV_SPAWN_ZOMBIE, (_client, message: unknown) => {
+        if (this.state.phase !== "playing") return;
+        if (!isDevTeleportMessage(message)) return; // same { x, y } finite-number shape
+        this.spawnZombieAt(message.x, message.y);
+      });
     }
     this.setSimulationInterval(() => this.tick(), TICK_MS);
   }
@@ -246,10 +278,39 @@ export class ArenaRoom extends Room<ArenaState> {
     this.state.players.forEach((p, id) => {
       targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now, kind: "player" });
     });
+    this.state.zombies.forEach((z, id) => {
+      targets.push({ id, x: z.x, y: z.y, immune: false, kind: "zombie" });
+    });
     const hits = stepBullets(this.bulletGrid, this.state.bullets, this.bulletMeta, targets, this.state.tick);
     for (const hit of hits) {
       if (this.state.phase !== "playing") break; // a hit in this batch just ended the game
       this.resolveHit(hit, now);
+    }
+
+    if (this.state.phase !== "playing") return; // a bullet kill may have ended the game
+
+    // 3. Zombies: retarget nearest, steer, attack.
+    const playerTargets = targets.filter((t) => t.kind === "player");
+    const attacks = stepZombies(this.grid, this.state.zombies, this.zombieMeta, playerTargets, now);
+    for (const attack of attacks) {
+      const victim = this.state.players.get(attack.victimId);
+      if (!victim) continue;
+      // playerTargets carries pre-bullet immune flags — a bullet kill this
+      // same tick already respawned (and immunized) the victim; re-check.
+      if (victim.immuneUntil > now) continue;
+      victim.hp = Math.max(0, victim.hp - attack.damage); // uint8 — never assign negative
+      const evt: ZombieAttackEvent = { x: attack.x, y: attack.y };
+      this.broadcast(EVT_ZOMBIE_ATTACK, evt);
+      // Zombie kills: respawn only — no feed line, no credit (legacy-verified, addendum 4).
+      if (victim.hp === 0) this.respawn(victim, now);
+    }
+
+    // 4a. Zombie spawner: one per interval up to the cap. Anchored to a
+    // next-spawn tick set at game start — state.tick never resets across
+    // games, so a modulo check would drift later games' first spawn.
+    if (this.zombieSpawning && this.state.tick >= this.nextZombieSpawnTick) {
+      this.nextZombieSpawnTick = this.state.tick + ZOMBIE_SPAWN_TICKS;
+      if (this.state.zombies.size < ZOMBIE_MAX_ALIVE) this.spawnZombie();
     }
   }
 
@@ -367,6 +428,9 @@ export class ArenaRoom extends Room<ArenaState> {
       i += 1;
     });
     this.state.bullets.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
+    this.nextZombieSpawnTick = this.state.tick + ZOMBIE_SPAWN_TICKS;
     this.state.winnerName = "";
     this.combat.forEach((_meta, sessionId) => this.combat.set(sessionId, freshCombatMeta()));
     this.bulletMeta.clear();
@@ -404,6 +468,12 @@ export class ArenaRoom extends Room<ArenaState> {
   }
 
   private resolveHit(hit: Hit, now: number): void {
+    if (hit.victimKind === "zombie") {
+      // One-hit-kill, no credit, no feed line (spec). Client plays the corpse anim.
+      this.state.zombies.delete(hit.victimId);
+      this.zombieMeta.delete(hit.victimId);
+      return;
+    }
     const victim = this.state.players.get(hit.victimId);
     if (!victim) return;
     if (victim.immuneUntil > now) return; // killed-and-respawned earlier this same tick
@@ -462,6 +532,8 @@ export class ArenaRoom extends Room<ArenaState> {
     this.broadcastLog("win", `${winner.name} has won the game!`);
     this.state.bullets.clear();
     this.bulletMeta.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
     this.winTimer = this.clock.setTimeout(() => {
       if (this.state.phase === "ended") this.resetToLobby();
     }, WIN_BANNER_MS);
@@ -475,6 +547,8 @@ export class ArenaRoom extends Room<ArenaState> {
     this.state.winnerName = "";
     this.state.bullets.clear();
     this.bulletMeta.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
     this.inputQueues.forEach((queue) => {
       queue.length = 0;
     });
@@ -493,5 +567,21 @@ export class ArenaRoom extends Room<ArenaState> {
     player.vx = 0;
     player.vy = 0;
     player.rollTicksLeft = 0;
+  }
+
+  private spawnZombie(): void {
+    const p = ZOMBIE_SPAWN_POINTS[Math.floor(Math.random() * ZOMBIE_SPAWN_POINTS.length)];
+    if (!p) return; // noUncheckedIndexedAccess; unreachable (non-empty table)
+    this.spawnZombieAt(p.x, p.y);
+  }
+
+  private spawnZombieAt(x: number, y: number): void {
+    const zombie = new Zombie();
+    zombie.x = x;
+    zombie.y = y;
+    const id = `z${this.zombieCounter}`;
+    this.zombieCounter += 1;
+    this.state.zombies.set(id, zombie);
+    this.zombieMeta.set(id, { nextAttackAt: 0 });
   }
 }
