@@ -10,7 +10,10 @@ export function App(): JSX.Element {
   const hook = useArenaRoom();
 
   let view: JSX.Element;
-  if ((hook.status === "joined" || hook.status === "reconnecting") && hook.phase === "playing") {
+  if (
+    (hook.status === "joined" || hook.status === "reconnecting") &&
+    (hook.phase === "playing" || hook.phase === "ended")
+  ) {
     // key=roomEpoch: a reconnect produces a new Room instance, but getRoom is a
     // stable callback so GameMount's effect never re-runs — remounting is what
     // rebinds Phaser (and prediction seeding) to the fresh room.

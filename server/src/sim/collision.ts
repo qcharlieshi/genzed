@@ -13,18 +13,28 @@ const CANDIDATES = [
   path.resolve(__dirname, "../../../client/public/assets/maps/main.json"),
 ];
 
-let cached: SolidityGrid | null = null;
-
-export function loadSolidityGrid(): SolidityGrid {
-  if (cached) return cached;
+function readMapJson(): TiledMapJson {
   for (const candidate of CANDIDATES) {
     try {
-      const json = JSON.parse(readFileSync(candidate, "utf8")) as TiledMapJson;
-      cached = buildSolidityGrid(json);
-      return cached;
+      return JSON.parse(readFileSync(candidate, "utf8")) as TiledMapJson;
     } catch {
       // try next candidate
     }
   }
   throw new Error(`arena map JSON not found; looked in:\n${CANDIDATES.join("\n")}`);
+}
+
+let cached: SolidityGrid | null = null;
+let cachedBullet: SolidityGrid | null = null;
+
+// Player grid: union of all collision-flagged layers (wall + water + litWall).
+export function loadSolidityGrid(): SolidityGrid {
+  if (!cached) cached = buildSolidityGrid(readMapJson());
+  return cached;
+}
+
+// Bullet grid: wallCollision only — bullets fly over water and lit-wall tiles.
+export function loadBulletGrid(): SolidityGrid {
+  if (!cachedBullet) cachedBullet = buildSolidityGrid(readMapJson(), ["wallCollision"]);
+  return cachedBullet;
 }

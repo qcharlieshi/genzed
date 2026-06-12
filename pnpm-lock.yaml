@@ -39,8 +39,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       colyseus.js:
-        specifier: 0.15.26
-        version: 0.15.26
+        specifier: 0.15.28
+        version: 0.15.28
       phaser:
         specifier: 3.80.1
         version: 3.80.1
@@ -1120,6 +1120,10 @@ packages:
 
   colyseus.js@0.15.26:
     resolution: {integrity: sha512-FH4sloxkVLHpLJ7+KC8nCAJ5BXgeyL8RfgzhSbm1sLVSJ91hs+ji0C8TqifwYWQa+oSE5Vr5J4r4vcIG2zM5gw==}
+    engines: {node: '>= 12.x'}
+
+  colyseus.js@0.15.28:
+    resolution: {integrity: sha512-fJx/EcK4fQsugNviXpTD78bVXySutLprViAWy5qMuyhcU0MfeUuHfrlvUqI18dQUStGckvLggTC7EexmIyI+3g==}
     engines: {node: '>= 12.x'}
 
   colyseus@0.15.57:
@@ -3402,6 +3406,16 @@ snapshots:
   color-name@1.1.4: {}
 
   colyseus.js@0.15.26:
+    dependencies:
+      '@colyseus/schema': 2.0.37
+      httpie: 2.0.0-next.13
+      tslib: 2.8.1
+      ws: 8.21.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  colyseus.js@0.15.28:
     dependencies:
       '@colyseus/schema': 2.0.37
       httpie: 2.0.0-next.13

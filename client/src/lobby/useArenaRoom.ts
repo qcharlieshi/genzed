@@ -81,7 +81,14 @@ export function useArenaRoom(): ArenaRoomHook {
     };
 
     sync();
-    room.onStateChange(sync);
+    // Targeted listeners instead of onStateChange: bullet/position churn patches
+    // 20×/s once combat ships — React must only re-render on lobby-relevant
+    // changes (phase, countdown, membership). HUD reads schema inside Phaser.
+    // Per-player property changes (e.g. ready) intentionally do NOT re-render React.
+    room.state.listen("phase", sync);
+    room.state.listen("countdownMs", sync);
+    room.state.players.onAdd(sync);
+    room.state.players.onRemove(sync);
     room.onError((code, message) => {
       setError({ code, message: message ?? "room error" });
     });

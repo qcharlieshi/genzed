@@ -32,3 +32,51 @@ export const SPAWN_POINTS = [
   { x: 96, y: 992 },
   { x: 992, y: 992 },
 ] as const;
+
+// === Stage 4A: combat (spec docs/superpowers/specs/2026-06-11-stage4-combat-design.md) ===
+
+export type GunSpec = {
+  name: string;
+  damage: number;
+  fireIntervalMs: number;
+  clip: number; // -1 = infinite (L5)
+  bulletSpeed: number; // px/s
+  bulletLifetimeMs: number; // 0 = lives until wall/world hit
+  gunFrame: string; // finalGunSheet atlas frame
+  bulletFrame: string;
+};
+
+// Cumulative gun ladder resolved from legacy upgrade deltas. Index = gunLevel - 1.
+// Level 6 is the win state, not a weapon.
+export const GUNS: readonly GunSpec[] = [
+  { name: "pistol", damage: 10, fireIntervalMs: 350, clip: 10, bulletSpeed: 500, bulletLifetimeMs: 0, gunFrame: "pistol.png", bulletFrame: "pistolBullet.png" },
+  { name: "smg", damage: 5, fireIntervalMs: 150, clip: 30, bulletSpeed: 500, bulletLifetimeMs: 0, gunFrame: "ak5 (1).png", bulletFrame: "New Piskel (11).png" },
+  { name: "sniper", damage: 70, fireIntervalMs: 1050, clip: 5, bulletSpeed: 1000, bulletLifetimeMs: 0, gunFrame: "New Piskel (15).png", bulletFrame: "New Piskel (16).png" },
+  { name: "heavy", damage: 90, fireIntervalMs: 1550, clip: 2, bulletSpeed: 200, bulletLifetimeMs: 0, gunFrame: "New Piskel (17).png", bulletFrame: "New Piskel (17).png" },
+  { name: "melee", damage: 70, fireIntervalMs: 350, clip: -1, bulletSpeed: 200, bulletLifetimeMs: 50, gunFrame: "New Piskel (6).png", bulletFrame: "New Piskel (6).png" },
+];
+
+export const WIN_GUN_LEVEL = 6;
+export const GUN_L5_SPEED_BONUS = 36; // px/s, applied as Player.speedBonus at level 5
+
+export function gunForLevel(level: number): GunSpec {
+  const g = GUNS[Math.min(Math.max(level, 1), GUNS.length) - 1];
+  if (!g) throw new Error(`no gun for level ${level}`);
+  return g;
+}
+
+export const PLAYER_HEALTH = 100;
+export const RESPAWN_IMMUNITY_MS = 1000;
+
+export const ROLL_SPEED_BONUS = 100; // px/s on top of effective speed, roll direction only
+export const ROLL_DURATION_TICKS = 12; // 600 ms at 20 Hz
+export const ROLL_COOLDOWN_TICKS = 20; // 1000 ms, measured from roll start
+
+export const RELOAD_MS = 2000;
+export const ACTIVE_RELOAD_WINDOW_MS: readonly [number, number] = [1350, 1650];
+export const ACTIVE_RELOAD_DAMAGE_BONUS = 10;
+export const ACTIVE_RELOAD_BONUS_MS = 2500;
+export const RELOAD_JAM_TOTAL_MS = 3500; // jam: reload completes at attempt + this
+
+export const BULLET_SUBSTEP_PX = 16;
+export const WIN_BANNER_MS = 10_000; // "ended" → lobby reset delay
