@@ -4,9 +4,13 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
-    pool: "vmThreads",
+    // threads (not vmThreads): vm-context teardown segfaults on Linux CI once files
+    // hold live Colyseus servers/sockets (exit 139 on every master run since stage 3).
+    // Not forks: vitest 2.0.5 + tinypool 1.1.1 mangles worker stdout over child IPC.
+    // Serial because rooms bind real ports.
+    pool: "threads",
     poolOptions: {
-      vmThreads: {
+      threads: {
         singleThread: true,
       },
     },
