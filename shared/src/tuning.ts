@@ -147,5 +147,5 @@ export const CHAT_INTERVAL_MS = 1000; // per-player send rate
 // Vision cone (client-only render constants; Lighting.js:12-14,29)
 export const CONE_ANGLE_RAD = Math.PI / 2;
 export const CONE_LENGTH_PX = 270;
-export const CONE_RAYS = 60;
+export const CONE_RAYS = 60; // DEVIATION — legacy cast 300 px-step rays (Lighting.js:13); a Phaser 3 polygon needs far fewer angular samples
 export const CONE_DARKNESS_ALPHA = 0.7;
