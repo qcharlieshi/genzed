@@ -43,12 +43,16 @@ export async function twoPlayersInArena(browser: Browser): Promise<{
       // Consented leave via the debug hook — closing a context is a
       // non-consented leave, which keeps the room alive for the 10s
       // reconnection grace and blocks the next test's joinOrCreate.
+      // Runs from finally blocks: swallow page errors so a dead page
+      // doesn't mask the assertion that actually failed the test.
       for (const p of [pageA, pageB]) {
-        await p.evaluate(() => {
-          (window as unknown as { __arena?: { leave: () => void } }).__arena?.leave();
-        });
+        await p
+          .evaluate(() => {
+            (window as unknown as { __arena?: { leave: () => void } }).__arena?.leave();
+          })
+          .catch(() => {});
       }
-      await pageA.waitForTimeout(300); // let the server drop the room
+      await pageA.waitForTimeout(300).catch(() => {}); // let the server drop the room
       await ctxA.close();
       await ctxB.close();
     },
