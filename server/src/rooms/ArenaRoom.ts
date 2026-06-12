@@ -15,6 +15,10 @@ import {
   EVT_ZOMBIE_ATTACK,
   MSG_DEV_ZOMBIE_SPAWNING,
   MSG_DEV_SPAWN_ZOMBIE,
+  MSG_CHAT,
+  EVT_CHAT,
+  CHAT_MAX_LEN,
+  CHAT_INTERVAL_MS,
   WIN_GUN_LEVEL,
   RELOAD_MS,
   RELOAD_JAM_TOTAL_MS,
@@ -51,6 +55,8 @@ import {
   type LogKind,
   type ZombieAttackEvent,
   type DevZombieSpawningMessage,
+  type ChatMessage,
+  type ChatEvent,
 } from "@genzed/shared";
 import { ArenaState, Player, Bullet, Zombie, Pickup } from "../schema/ArenaState.js";
 import { loadSolidityGrid, loadBulletGrid } from "../sim/collision.js";
@@ -96,6 +102,7 @@ type CombatMeta = {
   bulletCounter: number;
   prevRank: number; // rank-change feed lines (Task 7)
   speedBoostUntil: number; // server-clock ms; 0 = no speed pickup active
+  nextChatAt: number;
 };
 
 function freshCombatMeta(): CombatMeta {
@@ -107,6 +114,7 @@ function freshCombatMeta(): CombatMeta {
     bulletCounter: 0,
     prevRank: 0,
     speedBoostUntil: 0,
+    nextChatAt: 0,
   };
 }
 
@@ -135,6 +143,11 @@ function isDevTeleportMessage(m: unknown): m is DevTeleportMessage {
 function isDevZombieSpawningMessage(m: unknown): m is DevZombieSpawningMessage {
   if (typeof m !== "object" || m === null) return false;
   return typeof (m as Record<string, unknown>).enabled === "boolean";
+}
+
+function isChatMessage(m: unknown): m is ChatMessage {
+  if (typeof m !== "object" || m === null) return false;
+  return typeof (m as Record<string, unknown>).text === "string";
 }
 
 function isFireMessage(m: unknown): m is FireMessage {
@@ -178,6 +191,7 @@ export class ArenaRoom extends Room<ArenaState> {
     this.onMessage(MSG_FIRE, (client, message: unknown) => this.handleFire(client, message));
     this.onMessage(MSG_RELOAD, (client) => this.handleReload(client));
     this.onMessage(MSG_ACTIVE_RELOAD, (client) => this.handleActiveReload(client));
+    this.onMessage(MSG_CHAT, (client, message: unknown) => this.handleChat(client, message));
     if (process.env.NODE_ENV !== "production") {
       this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) =>
         this.handleDevTeleport(client, message),
@@ -429,6 +443,21 @@ export class ArenaRoom extends Room<ArenaState> {
       result = { ok: false };
     }
     client.send(EVT_RELOAD_RESULT, result);
+  }
+
+  private handleChat(client: Client, message: unknown): void {
+    if (this.state.phase !== "playing" && this.state.phase !== "ended") return;
+    if (!isChatMessage(message)) return;
+    const player = this.state.players.get(client.sessionId);
+    const meta = this.combat.get(client.sessionId);
+    if (!player || !meta) return;
+    const text = message.text.trim();
+    if (text.length === 0 || text.length > CHAT_MAX_LEN) return;
+    const now = Date.now();
+    if (now < meta.nextChatAt) return; // 1/s per player
+    meta.nextChatAt = now + CHAT_INTERVAL_MS;
+    const evt: ChatEvent = { name: player.name, text };
+    this.broadcast(EVT_CHAT, evt);
   }
 
   private assignSpawns(): void {

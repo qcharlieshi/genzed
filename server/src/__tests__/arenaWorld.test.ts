@@ -8,8 +8,10 @@ import {
   MSG_FIRE,
   MSG_DEV_ZOMBIE_SPAWNING,
   MSG_DEV_SPAWN_ZOMBIE,
+  MSG_CHAT,
   EVT_ZOMBIE_ATTACK,
   EVT_LOG,
+  EVT_CHAT,
   ZOMBIE_SPAWN_POINTS,
   ZOMBIE_ATTACK_DAMAGE,
   PICKUP_KIND_HEALTH,
@@ -17,6 +19,7 @@ import {
   SPEED_PICKUP_BONUS,
   type ZombieAttackEvent,
   type LogEvent,
+  type ChatEvent,
 } from "@genzed/shared";
 
 let colyseus: ColyseusTestServer;
@@ -180,4 +183,31 @@ describe("pickups", () => {
     await sleep(3000);
     expect(room.state.pickups.size).toBe(4);
   }, 20_000);
+});
+
+describe("chat relay", () => {
+  it("broadcasts trimmed lines with the sender name; gates length, rate, and phase", async () => {
+    const { c1, c2 } = await startedGame();
+    const lines: ChatEvent[] = [];
+    c2.onMessage(EVT_CHAT, (m: ChatEvent) => lines.push(m));
+    await sleep(150);
+    c1.send(MSG_CHAT, { text: "  gg  " });
+    c1.send(MSG_CHAT, { text: "too fast" }); // inside the 1 s window — dropped
+    c1.send(MSG_CHAT, { text: "x".repeat(201) }); // too long — dropped
+    c1.send(MSG_CHAT, { text: "   " }); // empty after trim — dropped
+    c1.send(MSG_CHAT, 42); // malformed — dropped
+    await sleep(250);
+    expect(lines).toEqual([{ name: "a", text: "gg" }]);
+    await sleep(1000); // rate window passes
+    c1.send(MSG_CHAT, { text: "round two" });
+    await sleep(250);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toEqual({ name: "a", text: "round two" });
+    // Phase gate: back in the lobby, chat is dropped.
+    c1.send(MSG_END_GAME);
+    await sleep(200);
+    c1.send(MSG_CHAT, { text: "lobby talk" });
+    await sleep(250);
+    expect(lines).toHaveLength(2);
+  }, 15_000);
 });
