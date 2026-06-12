@@ -12,6 +12,7 @@ import {
   RECONCILE_SNAP_PX,
   RESPAWN_IMMUNITY_MS,
   DIR_LEFT,
+  PLAYER_HEALTH,
   buildSolidityGrid,
   gunForLevel,
   LocalPrediction,
@@ -119,7 +120,7 @@ export class ArenaScene extends Phaser.Scene {
   private reloadUiStart: number | null = null; // performance.now() at observed reload start
   private reloadJammed = false;
   private prevReloadStartedAt = 0;
-  private prevOwnHp = 100;
+  private prevOwnHp = PLAYER_HEALTH;
   private prevGunLevel = 0;
   private bannerShown = false;
 
@@ -188,6 +189,15 @@ export class ArenaScene extends Phaser.Scene {
     this.crosshair = this.add.image(0, 0, CROSSHAIR_ATLAS, CROSSHAIR_FRAME).setDepth(1000);
 
     this.hud = new ArenaHud(this);
+
+    // Seed transition detectors from the live state so a mid-game reconnect
+    // doesn't fire phantom hurt/reload cues against the defaults.
+    const me0 = this.room.state.players.get(this.localSessionId);
+    if (me0) {
+      this.prevOwnHp = me0.hp;
+      this.prevGunLevel = me0.gunLevel;
+      this.prevReloadStartedAt = me0.reloadStartedAt;
+    }
 
     // Broadcast events → sounds / FX / feed. The unbind closures MUST be kept:
     // the Room outlives the scene (win → lobby → next game remounts a fresh

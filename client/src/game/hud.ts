@@ -112,9 +112,11 @@ export class ArenaHud {
     this.layoutFeed();
     this.scene.time.delayedCall(FEED_TTL_MS, () => {
       const idx = this.feedTexts.indexOf(t);
-      if (idx >= 0) this.feedTexts.splice(idx, 1);
-      t.destroy();
-      this.layoutFeed();
+      if (idx >= 0) {
+        this.feedTexts.splice(idx, 1);
+        t.destroy();
+        this.layoutFeed();
+      }
     });
   }
 
