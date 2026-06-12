@@ -23,6 +23,7 @@ import {
   EVT_LOG,
   EVT_RELOAD_RESULT,
   EVT_ZOMBIE_ATTACK,
+  PICKUP_KIND_SPEED,
   type PlayerSim,
   type SimInput,
   type SolidityGrid,
@@ -128,6 +129,7 @@ export class ArenaScene extends Phaser.Scene {
   private views = new Map<string, PlayerView>();
   private bulletViews = new Map<string, BulletSpriteView>();
   private zombieViews = new Map<string, ZombieSpriteView>();
+  private pickupSprites = new Map<string, Phaser.GameObjects.Image>();
   private nextGroanAt = 0; // legacy throttled the groan to one per 5 s
   private grid!: SolidityGrid;
   private prediction: LocalPrediction | null = null;
@@ -160,6 +162,8 @@ export class ArenaScene extends Phaser.Scene {
     this.load.atlas(MEDALS_ATLAS, "assets/images/medals.png", "assets/images/medals.json");
     this.load.atlas(RELOAD_ATLAS, "assets/images/reloadBar.png", "assets/images/reloadBar.json");
     this.load.atlas(ZOMBIE_ATLAS, "assets/images/zombieSprite.png", "assets/images/zombieSheet.json");
+    this.load.image("heartPickup", "assets/images/heart.png");
+    this.load.image("speedPickup", "assets/images/speed.png");
     this.load.audio("zombieGroan", "assets/sounds/zombie.wav");
     this.load.audio("zombieAttack", "assets/sounds/zombieHit.wav");
     this.load.audio("shot", "assets/sounds/heavyPistol.wav");
@@ -207,6 +211,18 @@ export class ArenaScene extends Phaser.Scene {
         if (!this.zombieViews.has(id)) this.addZombie(id, z);
       }) as unknown as () => void,
       this.room.state.zombies.onRemove((_z, id) => this.removeZombie(id)) as unknown as () => void,
+      this.room.state.pickups.onAdd((p, id) => {
+        if (this.pickupSprites.has(id)) return;
+        const sprite = this.add
+          .image(p.x, p.y, p.kind === PICKUP_KIND_SPEED ? "speedPickup" : "heartPickup")
+          .setDepth(43); // above the Task-12 darkness layer — legacy rendered pickups full-bright
+        if (p.kind === PICKUP_KIND_SPEED) sprite.setScale(0.5); // legacy pickups.js:26
+        this.pickupSprites.set(id, sprite);
+      }) as unknown as () => void,
+      this.room.state.pickups.onRemove((_p, id) => {
+        this.pickupSprites.get(id)?.destroy();
+        this.pickupSprites.delete(id);
+      }) as unknown as () => void,
     );
 
     this.keys = this.input.keyboard!.addKeys("W,A,S,D,SPACE,R") as ArenaScene["keys"];
@@ -589,6 +605,8 @@ export class ArenaScene extends Phaser.Scene {
     this.bulletViews.clear();
     this.zombieViews.forEach((view) => safeUnsub(view.unsubscribe));
     this.zombieViews.clear();
+    this.pickupSprites.forEach((sprite) => sprite.destroy());
+    this.pickupSprites.clear();
     this.prediction = null;
     // Drop the E2E debug hook — otherwise it dangles holding the destroyed scene graph.
     delete (window as unknown as { __arena?: unknown }).__arena;
