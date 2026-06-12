@@ -92,6 +92,57 @@ export function rollAnimFor(mask: number): { key: string; flipX: boolean } {
   return { key: ANIM.rollDown, flipX: false };
 }
 
+export const ZOMBIE_ATLAS = "zombie";
+
+export const ZOMBIE_ANIM = {
+  walk: "zombie-walk",
+  dead: "zombie-dead",
+} as const;
+
+// Legacy enemy.js:9-10 numeric indices resolved against zombieSheet.json hash
+// order (verified during planning — do not re-derive). 9 fps both. The art
+// faces LEFT natively; the scene sets flipX when vx > 0.
+const ZOMBIE_WALK_FRAMES = [
+  "zombieWalk1.png",
+  "zombieWalk2.png",
+  "zombieWalk3.png",
+  "zombieWalk4.png",
+  "zombieWalk1.png",
+  "zombieWalk5 (1).png",
+  "zombieWalk7 (1).png",
+];
+
+const ZOMBIE_DEAD_FRAMES = [
+  "zombieDeath2.png",
+  "zombieDeath3.png",
+  "zombieDeath4.png",
+  "zombieDeath5.png",
+  "zombieDeath6.png",
+  "zombieDeath7 (1).png",
+  "zombieDeath8.png",
+  "zombieDeath9.png",
+  "zombieDeath10.png",
+];
+
+export function registerZombieAnimations(scene: Phaser.Scene): void {
+  if (!scene.anims.exists(ZOMBIE_ANIM.walk)) {
+    scene.anims.create({
+      key: ZOMBIE_ANIM.walk,
+      frames: ZOMBIE_WALK_FRAMES.map((frame) => ({ key: ZOMBIE_ATLAS, frame })),
+      frameRate: 9,
+      repeat: -1,
+    });
+  }
+  if (!scene.anims.exists(ZOMBIE_ANIM.dead)) {
+    scene.anims.create({
+      key: ZOMBIE_ANIM.dead,
+      frames: ZOMBIE_DEAD_FRAMES.map((frame) => ({ key: ZOMBIE_ATLAS, frame })),
+      frameRate: 9,
+      repeat: 0,
+    });
+  }
+}
+
 export function registerPlayerAnimations(scene: Phaser.Scene): void {
   for (const [key, frames] of Object.entries(WALK_FRAMES)) {
     if (scene.anims.exists(key)) continue;

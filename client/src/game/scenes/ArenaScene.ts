@@ -6,6 +6,8 @@ import {
   MSG_RELOAD,
   MSG_ACTIVE_RELOAD,
   MSG_DEV_TELEPORT,
+  MSG_DEV_ZOMBIE_SPAWNING,
+  MSG_DEV_SPAWN_ZOMBIE,
   TICK_MS,
   WORLD_WIDTH,
   WORLD_HEIGHT,
@@ -13,12 +15,14 @@ import {
   RESPAWN_IMMUNITY_MS,
   DIR_LEFT,
   PLAYER_HEALTH,
+  ZOMBIE_CORPSE_MS,
   buildSolidityGrid,
   gunForLevel,
   LocalPrediction,
   EVT_SHOT,
   EVT_LOG,
   EVT_RELOAD_RESULT,
+  EVT_ZOMBIE_ATTACK,
   type PlayerSim,
   type SimInput,
   type SolidityGrid,
@@ -26,9 +30,10 @@ import {
   type ShotEvent,
   type LogEvent,
   type ReloadResultEvent,
+  type ZombieAttackEvent,
 } from "@genzed/shared";
 import { ArenaHud, GUN_CONTAINER_KEY, HEARTS_KEY, MEDALS_ATLAS, RELOAD_ATLAS } from "../hud.js";
-import type { ArenaState, BulletView, LobbyPlayer } from "../../lobby/arenaState.js";
+import type { ArenaState, BulletView, LobbyPlayer, ZombieView } from "../../lobby/arenaState.js";
 import {
   ANIM,
   CROSSHAIR_ATLAS,
@@ -37,7 +42,10 @@ import {
   GUN_ATLAS,
   IDLE_FRAME,
   PLAYER_ATLAS,
+  ZOMBIE_ATLAS,
+  ZOMBIE_ANIM,
   registerPlayerAnimations,
+  registerZombieAnimations,
   rollAnimFor,
 } from "../animations.js";
 import { RemoteInterpolation } from "../net/interpolation.js";
@@ -63,6 +71,13 @@ type BulletSpriteView = {
   unsubscribe: () => void;
 };
 
+type ZombieSpriteView = {
+  zombie: ZombieView; // live schema ref
+  sprite: Phaser.GameObjects.Sprite;
+  interp: RemoteInterpolation;
+  unsubscribe: () => void;
+};
+
 type ArenaDebugHook = {
   players: () => Array<{ id: string; x: number; y: number; hp: number; gunLevel: number; local: boolean }>;
   fire: (tx: number, ty: number) => void;
@@ -70,6 +85,9 @@ type ArenaDebugHook = {
   feed: () => string[];
   // Consented leave so E2E teardown doesn't trip the 10s reconnection grace.
   leave: () => void;
+  zombies: () => Array<{ id: string; x: number; y: number }>;
+  setZombieSpawning: (enabled: boolean) => void;
+  spawnZombie: (x: number, y: number) => void;
 };
 
 const MAP_KEY = "arena-map";
@@ -109,6 +127,8 @@ export class ArenaScene extends Phaser.Scene {
   private localSessionId = "";
   private views = new Map<string, PlayerView>();
   private bulletViews = new Map<string, BulletSpriteView>();
+  private zombieViews = new Map<string, ZombieSpriteView>();
+  private nextGroanAt = 0; // legacy throttled the groan to one per 5 s
   private grid!: SolidityGrid;
   private prediction: LocalPrediction | null = null;
   private keys!: Record<"W" | "A" | "S" | "D" | "SPACE" | "R", Phaser.Input.Keyboard.Key>;
@@ -139,6 +159,9 @@ export class ArenaScene extends Phaser.Scene {
     this.load.image(GUN_CONTAINER_KEY, "assets/images/ui/gunContainer.png");
     this.load.atlas(MEDALS_ATLAS, "assets/images/medals.png", "assets/images/medals.json");
     this.load.atlas(RELOAD_ATLAS, "assets/images/reloadBar.png", "assets/images/reloadBar.json");
+    this.load.atlas(ZOMBIE_ATLAS, "assets/images/zombieSprite.png", "assets/images/zombieSheet.json");
+    this.load.audio("zombieGroan", "assets/sounds/zombie.wav");
+    this.load.audio("zombieAttack", "assets/sounds/zombieHit.wav");
     this.load.audio("shot", "assets/sounds/heavyPistol.wav");
     this.load.audio("reloadStart", "assets/sounds/pistolReload.mp3");
     this.load.audio("reloadOk", "assets/sounds/reloadSuccess.wav");
@@ -168,6 +191,7 @@ export class ArenaScene extends Phaser.Scene {
     this.grid = buildSolidityGrid(mapJson);
 
     registerPlayerAnimations(this);
+    registerZombieAnimations(this);
 
     // onAdd fires for existing items in @colyseus/schema 2.x — no separate forEach.
     this.unsubscribers.push(
@@ -179,6 +203,10 @@ export class ArenaScene extends Phaser.Scene {
         if (!this.bulletViews.has(id)) this.addBullet(id, b);
       }) as unknown as () => void,
       this.room.state.bullets.onRemove((_b, id) => this.removeBullet(id)) as unknown as () => void,
+      this.room.state.zombies.onAdd((z, id) => {
+        if (!this.zombieViews.has(id)) this.addZombie(id, z);
+      }) as unknown as () => void,
+      this.room.state.zombies.onRemove((_z, id) => this.removeZombie(id)) as unknown as () => void,
     );
 
     this.keys = this.input.keyboard!.addKeys("W,A,S,D,SPACE,R") as ArenaScene["keys"];
@@ -216,6 +244,7 @@ export class ArenaScene extends Phaser.Scene {
           this.sound.play("reloadFail");
         }
       }) as unknown as () => void,
+      this.room.onMessage(EVT_ZOMBIE_ATTACK, (m: ZombieAttackEvent) => this.onZombieAttack(m)) as unknown as () => void,
     );
 
     this.sound.play("theme", { loop: true, volume: 0.25 });
@@ -244,6 +273,10 @@ export class ArenaScene extends Phaser.Scene {
       teleport: (x: number, y: number) => void this.room.send(MSG_DEV_TELEPORT, { x, y }),
       feed: () => this.hud.feedLines.slice(),
       leave: () => void this.room.leave(true),
+      zombies: () =>
+        [...this.zombieViews.entries()].map(([id, view]) => ({ id, x: view.sprite.x, y: view.sprite.y })),
+      setZombieSpawning: (enabled: boolean) => void this.room.send(MSG_DEV_ZOMBIE_SPAWNING, { enabled }),
+      spawnZombie: (x: number, y: number) => void this.room.send(MSG_DEV_SPAWN_ZOMBIE, { x, y }),
     };
   }
 
@@ -305,6 +338,41 @@ export class ArenaScene extends Phaser.Scene {
     view.unsubscribe();
     view.sprite.destroy();
     this.bulletViews.delete(id);
+  }
+
+  private addZombie(id: string, zombie: ZombieView): void {
+    const sprite = this.add.sprite(zombie.x, zombie.y, ZOMBIE_ATLAS, "zombieWalk1.png").setDepth(5);
+    sprite.play(ZOMBIE_ANIM.walk);
+    const interp = new RemoteInterpolation();
+    interp.push(zombie.x, zombie.y, 0);
+    const unsubscribe = zombie.onChange(() => {
+      interp.push(zombie.x, zombie.y, 0);
+    }) as unknown as () => void;
+    this.zombieViews.set(id, { zombie, sprite, interp, unsubscribe });
+  }
+
+  private removeZombie(id: string): void {
+    const view = this.zombieViews.get(id);
+    if (!view) return;
+    view.unsubscribe();
+    const corpse = this.add
+      .sprite(view.sprite.x, view.sprite.y, ZOMBIE_ATLAS, "zombieDeath2.png")
+      .setFlipX(view.sprite.flipX)
+      .setDepth(5);
+    corpse.play(ZOMBIE_ANIM.dead);
+    this.time.delayedCall(ZOMBIE_CORPSE_MS, () => corpse.destroy());
+    view.sprite.destroy();
+    this.zombieViews.delete(id);
+  }
+
+  private onZombieAttack(evt: ZombieAttackEvent): void {
+    // Same linear falloff as remote shots (legacy played it full-volume on one
+    // arbitrary client — plan addendum 2).
+    const me = this.views.get(this.localSessionId);
+    if (!me) return;
+    const distance = Math.hypot(evt.x - me.sprite.x, evt.y - me.sprite.y);
+    const volume = 1 - (distance - 30) / 600;
+    if (volume > 0) this.sound.play("zombieAttack", { volume: Math.min(1, volume) });
   }
 
   private sampleInput(): void {
@@ -439,6 +507,26 @@ export class ArenaScene extends Phaser.Scene {
       view.prevImmuneUntil = view.player.immuneUntil;
     });
 
+    // Zombies: interpolated like remote players; art faces left → flipX when moving right.
+    let nearestZombie = Infinity;
+    this.zombieViews.forEach((view) => {
+      const s = view.interp.sample();
+      if (s) view.sprite.setPosition(s.x, s.y);
+      view.sprite.setFlipX(view.zombie.vx > 0);
+      if (local) {
+        const d = Math.hypot(view.sprite.x - local.sprite.x, view.sprite.y - local.sprite.y);
+        if (d < nearestZombie) nearestZombie = d;
+      }
+    });
+    if (nearestZombie < Infinity && performance.now() >= this.nextGroanAt) {
+      const perc = 1 - (nearestZombie - 30) / 150 - 0.2;
+      const volume = perc > 1 ? 0.8 : perc;
+      if (volume > 0) {
+        this.sound.play("zombieGroan", { volume });
+        this.nextGroanAt = performance.now() + 5000;
+      }
+    }
+
     // Bullets: dead-reckon between patches (linear motion — extrapolation exact).
     const dtSec = delta / 1000;
     this.bulletViews.forEach((view) => {
@@ -499,6 +587,8 @@ export class ArenaScene extends Phaser.Scene {
     this.views.clear();
     this.bulletViews.forEach((view) => safeUnsub(view.unsubscribe));
     this.bulletViews.clear();
+    this.zombieViews.forEach((view) => safeUnsub(view.unsubscribe));
+    this.zombieViews.clear();
     this.prediction = null;
     // Drop the E2E debug hook — otherwise it dangles holding the destroyed scene graph.
     delete (window as unknown as { __arena?: unknown }).__arena;
