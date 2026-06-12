@@ -15,11 +15,18 @@ import {
   buildSolidityGrid,
   gunForLevel,
   LocalPrediction,
+  EVT_SHOT,
+  EVT_LOG,
+  EVT_RELOAD_RESULT,
   type PlayerSim,
   type SimInput,
   type SolidityGrid,
   type TiledMapJson,
+  type ShotEvent,
+  type LogEvent,
+  type ReloadResultEvent,
 } from "@genzed/shared";
+import { ArenaHud, GUN_CONTAINER_KEY, HEARTS_KEY, MEDALS_ATLAS, RELOAD_ATLAS } from "../hud.js";
 import type { ArenaState, BulletView, LobbyPlayer } from "../../lobby/arenaState.js";
 import {
   ANIM,
@@ -59,6 +66,7 @@ type ArenaDebugHook = {
   players: () => Array<{ id: string; x: number; y: number; hp: number; gunLevel: number; local: boolean }>;
   fire: (tx: number, ty: number) => void;
   teleport: (x: number, y: number) => void;
+  feed: () => string[];
   // Consented leave so E2E teardown doesn't trip the 10s reconnection grace.
   leave: () => void;
 };
@@ -107,6 +115,13 @@ export class ArenaScene extends Phaser.Scene {
   private localAimAngle = 0;
   private nextFireAt = 0; // client-side mirror of the fire gate (server re-gates)
   private unsubscribers: Array<() => void> = [];
+  private hud!: ArenaHud;
+  private reloadUiStart: number | null = null; // performance.now() at observed reload start
+  private reloadJammed = false;
+  private prevReloadStartedAt = 0;
+  private prevOwnHp = 100;
+  private prevGunLevel = 0;
+  private bannerShown = false;
 
   constructor() {
     super("arena");
@@ -119,6 +134,18 @@ export class ArenaScene extends Phaser.Scene {
     this.load.atlas(PLAYER_ATLAS, "assets/images/playerRolls.png", "assets/images/playerRolls.json");
     this.load.atlas(GUN_ATLAS, "assets/images/finalGunSheet.png", "assets/images/finalGunSheet.json");
     this.load.atlas(CROSSHAIR_ATLAS, "assets/images/crosshair.png", "assets/images/crosshair.json");
+    this.load.spritesheet(HEARTS_KEY, "assets/images/ui/hearts.png", { frameWidth: 32, frameHeight: 32 });
+    this.load.image(GUN_CONTAINER_KEY, "assets/images/ui/gunContainer.png");
+    this.load.atlas(MEDALS_ATLAS, "assets/images/medals.png", "assets/images/medals.json");
+    this.load.atlas(RELOAD_ATLAS, "assets/images/reloadBar.png", "assets/images/reloadBar.json");
+    this.load.audio("shot", "assets/sounds/heavyPistol.wav");
+    this.load.audio("reloadStart", "assets/sounds/pistolReload.mp3");
+    this.load.audio("reloadOk", "assets/sounds/reloadSuccess.wav");
+    this.load.audio("reloadFail", "assets/sounds/reloadFail.wav");
+    this.load.audio("hurt", "assets/sounds/playerHurt.wav");
+    this.load.audio("levelup", "assets/sounds/levelUp.wav");
+    this.load.audio("win", "assets/sounds/gameWin.wav");
+    this.load.audio("theme", "assets/sounds/themeLoop.wav");
   }
 
   create(data: ArenaSceneData): void {
@@ -160,6 +187,29 @@ export class ArenaScene extends Phaser.Scene {
     this.input.setDefaultCursor("none");
     this.crosshair = this.add.image(0, 0, CROSSHAIR_ATLAS, CROSSHAIR_FRAME).setDepth(1000);
 
+    this.hud = new ArenaHud(this);
+
+    // Broadcast events → sounds / FX / feed. The unbind closures MUST be kept:
+    // the Room outlives the scene (win → lobby → next game remounts a fresh
+    // scene on the SAME room), and colyseus.js onMessage handlers accumulate —
+    // an unbound handler would fire into a destroyed scene next game.
+    this.unsubscribers.push(
+      this.room.onMessage(EVT_SHOT, (m: ShotEvent) => this.onShot(m)) as unknown as () => void,
+      this.room.onMessage(EVT_LOG, (m: LogEvent) => this.hud.pushFeedLine(m.text)) as unknown as () => void,
+      this.room.onMessage(EVT_RELOAD_RESULT, (m: ReloadResultEvent) => {
+        if (m.ok) {
+          this.reloadJammed = false;
+          this.hud.flashReloadSuccess();
+          this.sound.play("reloadOk");
+        } else {
+          this.reloadJammed = true;
+          this.sound.play("reloadFail");
+        }
+      }) as unknown as () => void,
+    );
+
+    this.sound.play("theme", { loop: true, volume: 0.25 });
+
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     // Phaser 3 does NOT auto-call a method named shutdown() (that was Phaser 2);
@@ -182,6 +232,7 @@ export class ArenaScene extends Phaser.Scene {
         })),
       fire: (tx: number, ty: number) => void this.room.send(MSG_FIRE, { tx, ty }),
       teleport: (x: number, y: number) => void this.room.send(MSG_DEV_TELEPORT, { x, y }),
+      feed: () => this.hud.feedLines.slice(),
       leave: () => void this.room.leave(true),
     };
   }
@@ -277,6 +328,31 @@ export class ArenaScene extends Phaser.Scene {
     }
   }
 
+  private onShot(shot: ShotEvent): void {
+    // Muzzle flash for everyone.
+    const flash = this.add.circle(shot.x, shot.y, 4, 0xffffaa).setDepth(8);
+    this.time.delayedCall(80, () => flash.destroy());
+    if (shot.shooterId === this.localSessionId) {
+      this.sound.play("shot", { volume: 1 });
+      this.cameras.main.shake(40, 0.005); // legacy camera.shake(0.005, 40), Phaser 3 arg order
+      return;
+    }
+    // Legacy linear falloff: 1 - ((distance - 30) / 600), silent beyond earshot.
+    const me = this.views.get(this.localSessionId);
+    if (!me) return;
+    const distance = Math.hypot(shot.x - me.sprite.x, shot.y - me.sprite.y);
+    const volume = 1 - (distance - 30) / 600;
+    if (volume > 0) this.sound.play("shot", { volume: Math.min(1, volume) });
+  }
+
+  // Rank among players by gun level (ties by join order) — drives the medal.
+  private localRank(): number {
+    const order: Array<{ id: string; gunLevel: number; joinedAt: number }> = [];
+    this.room.state.players.forEach((p, id) => order.push({ id, gunLevel: p.gunLevel, joinedAt: p.joinedAt }));
+    order.sort((a, b) => b.gunLevel - a.gunLevel || a.joinedAt - b.joinedAt);
+    return Math.max(0, order.findIndex((e) => e.id === this.localSessionId));
+  }
+
   private playRollAnimation(sprite: Phaser.GameObjects.Sprite, mask: number): void {
     const roll = rollAnimFor(mask);
     if (sprite.anims.currentAnim?.key !== roll.key) sprite.play(roll.key);
@@ -364,9 +440,42 @@ export class ArenaScene extends Phaser.Scene {
     const pointer = this.input.activePointer;
     pointer.updateWorldPoint(this.cameras.main);
     this.crosshair.setPosition(pointer.worldX, pointer.worldY);
+
+    // HUD + local-player sound triggers (all schema-transition driven; the
+    // reload bar runs off the locally-observed start, never the server clock).
+    const me = this.room.state.players.get(this.localSessionId);
+    if (me) {
+      this.hud.updateLocal(me, this.localRank());
+      if (me.reloadStartedAt > 0 && this.prevReloadStartedAt === 0) {
+        this.reloadUiStart = performance.now();
+        this.reloadJammed = false;
+        this.sound.play("reloadStart");
+      } else if (me.reloadStartedAt === 0 && this.prevReloadStartedAt > 0) {
+        this.reloadUiStart = null;
+        this.reloadJammed = false;
+      }
+      this.prevReloadStartedAt = me.reloadStartedAt;
+      this.hud.updateReload(
+        this.reloadUiStart === null ? null : performance.now() - this.reloadUiStart,
+        this.reloadJammed,
+      );
+      if (me.hp < this.prevOwnHp) this.sound.play("hurt");
+      this.prevOwnHp = me.hp;
+      if (this.prevGunLevel > 0 && me.gunLevel > this.prevGunLevel) this.sound.play("levelup");
+      this.prevGunLevel = me.gunLevel;
+    }
+
+    // Win banner: checked here (not in a listen("phase") callback) so the whole
+    // patch — including winnerName — has applied before we read it.
+    if (this.room.state.phase === "ended" && !this.bannerShown) {
+      this.bannerShown = true;
+      this.hud.showBanner(this.room.state.winnerName);
+      this.sound.play("win");
+    }
   }
 
   shutdown(): void {
+    this.sound.stopAll();
     const safeUnsub = (fn: () => void): void => {
       try {
         fn();
