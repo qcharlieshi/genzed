@@ -133,7 +133,7 @@ Branch `stage-3-movement`. Adds:
 
 ## Stage 4A — what shipped
 
-Branch `stage-4a-combat`, built and verified 2026-06-11. **Not yet merged to `master`.**
+Branch `stage-4a-combat`, built and verified 2026-06-11. **Merged to `master` 2026-06-12** (`cd662729`, merge commit; branch kept on origin per stage convention).
 
 - **Colyseus client alignment:** `colyseus.js` bumped to 0.15.28; single `@colyseus/schema@2.0.37` across server + client.
 - **Legacy assets ported verbatim:** gun + UI sprite atlases and 8 sound files copied from `legacy/client/assets/` into `client/public/assets/`.
@@ -152,7 +152,10 @@ Branch `stage-4a-combat`, built and verified 2026-06-11. **Not yet merged to `ma
 - `MSG_DEV_TELEPORT` test seam is registered only when `NODE_ENV !== "production"` (the Docker image sets `production`; Fly uses that image). The dev `MSG_END_GAME` reset remains unconditional (pre-existing).
 - Plan addenda vs the spec (documented in the plan's "Plan addenda" section): `EVT_RELOAD_RESULT` as a targeted event; `rollDirMask` uint8 instead of a 4-way `rollDir`; `ArenaState.tick`.
 - Stricter input validation orphans pre-4A clients: a stale open tab from before this deploy will have movement silently dropped until refresh.
-- **Stage 5 notes:** `themeLoop.wav` is 6.1 MB uncompressed — convert to ogg/mp3 before deploy. Active-reload success flash may be imperceptible (~0–50 ms) — hold ~150 ms if playtest confirms. Client fire self-gate has zero jitter tolerance (shots may be silently dropped on bad links; server re-gates anyway).
+- **Stage 5 notes:** `themeLoop.wav` is 6.1 MB uncompressed — convert to ogg/mp3 before deploy. Active-reload success flash may be imperceptible (~0–50 ms) — hold ~150 ms if playtest confirms. Client fire self-gate has zero jitter tolerance (shots may be silently dropped on bad links; server re-gates anyway). Client keeps sending input for a frame after a consented leave (benign "WebSocket is already in CLOSING" console noise) — stop the input loop on leave.
+- **CI segfault found at merge time (pre-existing since the stage-3 merge):** every master push failed `pnpm test` with exit 139 on the ubuntu runner — vitest 2.0.5 `vmThreads` vm-context teardown crashes on Linux once files hold live Colyseus servers/sockets. Invisible for three runs because the deploy job's `FLY_API_TOKEN` failure already made every run red. Fixed in PR #2 (`7f04c27e`): pool → `threads` + `singleThread`. `forks` is unusable on vitest 2.0.5 + tinypool 1.1.1 (worker stdout mangled over child IPC). **Until the Fly secret is set, judge CI by the build job, not the run conclusion.**
+- **CI e2e flake (post-segfault-fix, 2× on master, same tree green on the PR):** movement's fixed 600 ms key-hold missed its >15 px displacement margin by ~0.3 px on the loaded runner, and the thrown assertion skipped `close()` — the non-consented disconnects left 10 s-grace ghosts in a `playing` room, cascading into smoke's join timeout. Fix: displacement is now `expect.poll`ed while the key is held, and movement/smoke close in `finally` (combat already did). Fixing those unmasked a third defect: a benign "WebSocket is already in CLOSING or CLOSED state" console error (last input send racing the consented-leave close) tripped the zero-tolerance `errors` assertion — filtered as known-benign in the helper collector, same policy as combat's autoplay filter.
+- **Local/CI node skew:** `.tool-versions` pins node 20.18.0 but it was never installed locally — all local gates so far ran on global node 24.15. 20.18.0 is now installed; CI-faithful run: `mise x node@20.18.0 -- pnpm -C server test`.
 - **Next:** slice 4B — zombies, health/speed pickups, chat, vision cone (own plan).
 
 ## Verification (Stage 4A)
@@ -166,6 +169,7 @@ Branch `stage-4a-combat`, built and verified 2026-06-11. **Not yet merged to `ma
 | `pnpm dev` (browser) | ✅ alice kills bob; kill-feed "alice has slain bob" visible on bob's page; alice advances to gun level 2 — `docs/stage4-evidence/4a-dev-fight.png` |
 | `pnpm build` + prod server (browser) | ✅ same on one port; teleport seam confirmed active in prod bundle — `docs/stage4-evidence/4a-prod-fight.png` |
 | `docker build` + `docker run` | ⚠️ PENDING — Docker daemon unavailable on this dev machine. Dockerfile and `fly.toml` are byte-identical to Stage 3's verified build. Run the Docker smoke before or at deploy. |
+| CI build job (ubuntu runner, Node 20) | ✅ green on PR #2 after the vitest pool fix — first-ever CI execution of the 4A suite (75/75) + e2e (3/3) on Linux |
 
 ## Known sharp edges for Stage 4
 
