@@ -29,7 +29,8 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | **1. Foundation** | Monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world | ✅ Shipped — live at https://genzed.fly.dev |
 | **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | ✅ Shipped |
 | **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ✅ Shipped — merged to `master` 2026-06-10 |
-| **4. Combat** | Weapons, bullets, zombies, damage, pickups, scoring (port tuning from `legacy/`) | ⬜ Not started |
+| **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Shipped — merged to `master` 2026-06-11 |
+| **4B. Combat — Zombies + pickups** | Zombie spawner, weapon pickups, kill-feed, chat, vision cone | ⬜ Not started |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
 
 Each stage gets its own spec → plan → build cycle.
@@ -129,6 +130,34 @@ Branch `stage-3-movement`. Adds:
 | `pnpm dev` (browser) | ✅ tilemap + sprites + labels, alice y −54 px on both clients during a "w" hold — `docs/stage3-evidence/stage3-01-arena-map.png`, `stage3-02-two-players.png` |
 | `pnpm build` + prod server (browser) | ✅ same on one port, map JSON served from `client/dist`; alice y −22 px (wall-stopped, consistent on both clients) — `docs/stage3-evidence/stage3-03-prod-arena.png` |
 | `docker build` + `docker run` | ✅ `/healthz`=ok, full join → arena flow, alice y −54 px on both clients — `docs/stage3-evidence/stage3-04-docker-arena.png` |
+
+## Stage 4A — what shipped
+
+Branch `stage-4a-combat`, shipped 2026-06-11. Merged to `master`.
+
+Server-authoritative combat is live: a gun-game ladder (Pistol → Shotgun → SMG → Assault Rifle → Sniper → LMG) where kills promote the shooter and demote the victim; 5 kills at LMG wins. The sim-state was refactored so `stepPlayer` (shared) accepts a full `PlayerSim` struct and returns it, enabling exact client-prediction replay and a parity test (server replay ≡ client replay for a 10-step sequence). Bullets travel server-side at up to 16 substeps per tick against the wall-collision grid (285 tiles); player AABB hit-testing detects them. On kill the victim respawns at a random legacy spawn point; on win the phase FSM emits the win banner and auto-returns to lobby. The client renders bullets as flashing sprites, shows a HUD (hearts, ammo pip-bar, gun name, kill-feed, win banner), plays fire/hit/reload/active-reload audio cues from the legacy asset atlas, and runs three combat-specific E2E specs (fire/hit, kill/respawn, win banner).
+
+**Operational notes:**
+
+- `MSG_DEV_TELEPORT` test seam exists; registered only when `NODE_ENV !== "production"` (Docker image sets `production`; Fly uses the Docker image). `MSG_END_GAME` dev reset remains unconditional (pre-existing).
+- `EVT_RELOAD_RESULT` is a targeted server→client event (not in the spec's broadcast list); rationale: jam/success audio needs instant feedback that schema state alone can't give without a race. See plan "Plan addenda" §1.
+- `rollDirMask` (uint8) replaces the spec's `rollDir: DIR_*` — encodes diagonal rolls; see plan addenda §3.
+- `ArenaState.tick` (uint32) added beyond the spec — needed by `Bullet.spawnTick` for flight-time math; see plan addenda §4.
+- Bullet collision grid = `wallCollision` only (285 tiles) vs player grid (411 tiles). Players can stand on tiles that don't block bullets — accepted at prototype tier.
+- **Stage 5 notes:** `themeLoop.wav` is 6.1 MB uncompressed (convert to ogg/mp3 before deploy). Active-reload success flash may be imperceptible (~0–50 ms HUD tint) — hold ~150 ms if playtest confirms. Client fire self-gate has zero jitter tolerance (shots can be silently dropped on bad links — server re-gates anyway).
+- Stage 4B (zombies/pickups/chat/vision cone) is the next plan.
+
+## Verification (Stage 4A)
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | ✅ clean across all packages |
+| `pnpm lint` | ✅ clean |
+| `pnpm test` | ✅ server unit + combat integration tests pass |
+| `pnpm test:e2e` | ✅ lobby smoke + movement + combat specs pass |
+| `pnpm dev` (browser) | ✅ two-player fight with HUD, bullets, kill-feed visible — `docs/stage4-evidence/4a-dev-fight.png` |
+| `pnpm build` + prod server (browser) | ✅ same on one port, teleport seam works in prod bundle — `docs/stage4-evidence/4a-prod-fight.png` |
+| `docker build` + `docker run` | ⚠️ Docker daemon requires GUI interaction in this session — not captured; dev + prod bundle confirm the code path |
 
 ## Known sharp edges for Stage 4
 
