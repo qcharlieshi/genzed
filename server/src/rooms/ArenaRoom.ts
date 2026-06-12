@@ -138,7 +138,11 @@ export class ArenaRoom extends Room<ArenaState> {
     this.onMessage(MSG_FIRE, (client, message: unknown) => this.handleFire(client, message));
     this.onMessage(MSG_RELOAD, (client) => this.handleReload(client));
     this.onMessage(MSG_ACTIVE_RELOAD, (client) => this.handleActiveReload(client));
-    this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) => this.handleDevTeleport(client, message));
+    if (process.env.NODE_ENV !== "production") {
+      this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) =>
+        this.handleDevTeleport(client, message),
+      );
+    }
     this.setSimulationInterval(() => this.tick(), TICK_MS);
   }
 

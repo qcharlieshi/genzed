@@ -45,7 +45,7 @@ type PlayerView = {
   gun: Phaser.GameObjects.Sprite;
   label: Phaser.GameObjects.Text;
   interp: RemoteInterpolation | null; // null for the local player
-  prevHp: number;
+  prevImmuneUntil: number;
   unsubscribe: () => void;
 };
 
@@ -206,14 +206,14 @@ export class ArenaScene extends Phaser.Scene {
       const unsubscribe = player.onChange(() => {
         this.prediction?.reconcile(simFromPlayer(player), player.lastProcessedInput);
       }) as unknown as () => void;
-      this.views.set(sessionId, { player, sprite, gun, label, interp: null, prevHp: player.hp, unsubscribe });
+      this.views.set(sessionId, { player, sprite, gun, label, interp: null, prevImmuneUntil: player.immuneUntil, unsubscribe });
     } else {
       const interp = new RemoteInterpolation();
       interp.push(player.x, player.y, player.dir);
       const unsubscribe = player.onChange(() => {
         interp.push(player.x, player.y, player.dir);
       }) as unknown as () => void;
-      this.views.set(sessionId, { player, sprite, gun, label, interp, prevHp: player.hp, unsubscribe });
+      this.views.set(sessionId, { player, sprite, gun, label, interp, prevImmuneUntil: player.immuneUntil, unsubscribe });
     }
   }
 
@@ -279,7 +279,7 @@ export class ArenaScene extends Phaser.Scene {
 
   private playRollAnimation(sprite: Phaser.GameObjects.Sprite, mask: number): void {
     const roll = rollAnimFor(mask);
-    sprite.play(roll.key, true);
+    if (sprite.anims.currentAnim?.key !== roll.key) sprite.play(roll.key);
     sprite.setFlipX(roll.flipX);
   }
 
@@ -345,12 +345,12 @@ export class ArenaScene extends Phaser.Scene {
       view.gun.setRotation(angle);
       view.gun.setFlipY(Math.abs(angle) > Math.PI / 2);
       view.label.setPosition(view.sprite.x, view.sprite.y - 14);
-      if (view.player.hp === 100 && view.prevHp < 100) {
-        // Respawn observed (hp snapped back to full) — tint for the immunity window.
+      if (view.player.immuneUntil > view.prevImmuneUntil) {
+        // immuneUntil only ever increases on respawn (game-start reset lowers it to 0).
         view.sprite.setTint(IMMUNITY_TINT);
         this.time.delayedCall(RESPAWN_IMMUNITY_MS, () => view.sprite.clearTint());
       }
-      view.prevHp = view.player.hp;
+      view.prevImmuneUntil = view.player.immuneUntil;
     });
 
     // Bullets: dead-reckon between patches (linear motion — extrapolation exact).
@@ -367,17 +367,18 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   shutdown(): void {
-    this.unsubscribers.forEach((unsub) => {
+    const safeUnsub = (fn: () => void): void => {
       try {
-        unsub();
+        fn();
       } catch {
         /* ignore */
       }
-    });
+    };
+    this.unsubscribers.forEach(safeUnsub);
     this.unsubscribers = [];
-    this.views.forEach((view) => view.unsubscribe());
+    this.views.forEach((view) => safeUnsub(view.unsubscribe));
     this.views.clear();
-    this.bulletViews.forEach((view) => view.unsubscribe());
+    this.bulletViews.forEach((view) => safeUnsub(view.unsubscribe));
     this.bulletViews.clear();
     this.prediction = null;
     // Drop the E2E debug hook — otherwise it dangles holding the destroyed scene graph.
