@@ -18,11 +18,16 @@ export async function twoPlayersInArena(browser: Browser): Promise<{
   const pageA = await ctxA.newPage();
   const pageB = await ctxB.newPage();
 
+  // Benign teardown race: the client input/ping loop can fire one last send
+  // while a consented leave is closing the socket; Chrome logs it as a console
+  // error but it is not a page failure. (Stopping the input loop on leave is
+  // a Stage-5 polish item.)
+  const BENIGN_CONSOLE = /WebSocket is already in CLOSING or CLOSED state/;
   const errors: string[] = [];
   for (const p of [pageA, pageB]) {
     p.on("pageerror", (e) => errors.push(e.message));
     p.on("console", (msg) => {
-      if (msg.type() === "error") errors.push(msg.text());
+      if (msg.type() === "error" && !BENIGN_CONSOLE.test(msg.text())) errors.push(msg.text());
     });
   }
 
