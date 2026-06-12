@@ -9,9 +9,14 @@ import {
   MSG_DEV_ZOMBIE_SPAWNING,
   MSG_DEV_SPAWN_ZOMBIE,
   EVT_ZOMBIE_ATTACK,
+  EVT_LOG,
   ZOMBIE_SPAWN_POINTS,
   ZOMBIE_ATTACK_DAMAGE,
+  PICKUP_KIND_HEALTH,
+  PICKUP_SLOTS,
+  SPEED_PICKUP_BONUS,
   type ZombieAttackEvent,
+  type LogEvent,
 } from "@genzed/shared";
 
 let colyseus: ColyseusTestServer;
@@ -112,5 +117,67 @@ describe("zombie spawner + combat", () => {
     await sleep(200);
     expect(room.state.phase).toBe("lobby");
     expect(room.state.zombies.size).toBe(0);
+  }, 20_000);
+});
+
+describe("pickups", () => {
+  it("places the legacy initial layout when the game starts", async () => {
+    const { room } = await startedGame();
+    expect(room.state.pickups.size).toBe(4);
+    const byKind = { health: [] as string[], speed: [] as string[] };
+    room.state.pickups.forEach((p) => {
+      const key = `${p.x},${p.y}`;
+      if (p.kind === PICKUP_KIND_HEALTH) byKind.health.push(key);
+      else byKind.speed.push(key);
+    });
+    // PICKUP_SLOTS is an as-const tuple — literal indexing is exact-typed.
+    const slot = (s: { x: number; y: number }) => `${s.x},${s.y}`;
+    expect(byKind.health.sort()).toEqual([slot(PICKUP_SLOTS[4]), slot(PICKUP_SLOTS[1])].sort());
+    expect(byKind.speed.sort()).toEqual([slot(PICKUP_SLOTS[6]), slot(PICKUP_SLOTS[8])].sort());
+  }, 10_000);
+
+  it("health pack: +30 below 70, top-off at/above 70, feed line, pickup consumed", async () => {
+    const { room, c1, c2, p1 } = await startedGame();
+    c1.send(MSG_DEV_ZOMBIE_SPAWNING, { enabled: false }); // no hp interference
+    const logs: LogEvent[] = [];
+    c2.onMessage(EVT_LOG, (m: LogEvent) => logs.push(m));
+    await sleep(150);
+    p1.hp = 50;
+    p1.x = PICKUP_SLOTS[4].x; // health slot (as-const tuple: literal index is exact-typed)
+    p1.y = PICKUP_SLOTS[4].y;
+    await sleep(150);
+    expect(p1.hp).toBe(80);
+    expect(room.state.pickups.size).toBe(3);
+    expect(logs.some((l) => l.kind === "pickup" && l.text === "a has picked up a health pack!")).toBe(true);
+    // Second health pack at/above threshold tops off.
+    p1.hp = 75;
+    p1.x = PICKUP_SLOTS[1].x;
+    p1.y = PICKUP_SLOTS[1].y;
+    await sleep(150);
+    expect(p1.hp).toBe(100);
+  }, 10_000);
+
+  it("speed boost applies 100, refreshes (not stacks), expires to the gun bonus, and respawns", async () => {
+    const { room, c1, p1 } = await startedGame();
+    c1.send(MSG_DEV_ZOMBIE_SPAWNING, { enabled: false });
+    await sleep(150);
+    p1.x = PICKUP_SLOTS[6].x; // speed slot
+    p1.y = PICKUP_SLOTS[6].y;
+    await sleep(150);
+    expect(p1.speedBonus).toBe(SPEED_PICKUP_BONUS);
+    expect(room.state.pickups.size).toBe(3);
+    // Walk onto the second speed pickup mid-boost: still 100, never 200.
+    p1.x = PICKUP_SLOTS[8].x;
+    p1.y = PICKUP_SLOTS[8].y;
+    await sleep(150);
+    expect(p1.speedBonus).toBe(SPEED_PICKUP_BONUS);
+    p1.x = 128; // step off the slots so respawns aren't instantly re-collected
+    p1.y = 128;
+    // Expiry: refreshed at the second collect → 0 again ~5 s later.
+    await sleep(5300);
+    expect(p1.speedBonus).toBe(0);
+    // Respawn: first collect + 8 s — by now it's due; count returns to 4.
+    await sleep(3000);
+    expect(room.state.pickups.size).toBe(4);
   }, 20_000);
 });
