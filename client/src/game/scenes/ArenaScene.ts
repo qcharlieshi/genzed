@@ -50,6 +50,7 @@ import {
   rollAnimFor,
 } from "../animations.js";
 import { RemoteInterpolation } from "../net/interpolation.js";
+import { VisionCone } from "../cone.js";
 
 export type ArenaSceneData = {
   room: Room<ArenaState>;
@@ -146,6 +147,7 @@ export class ArenaScene extends Phaser.Scene {
   private prevGunLevel = 0;
   private bannerShown = false;
   private prevChatOpen = false;
+  private cone: VisionCone | null = null;
 
   constructor() {
     super("arena");
@@ -194,6 +196,9 @@ export class ArenaScene extends Phaser.Scene {
     // Same grid the server simulates against, built from the same JSON.
     const mapJson = this.cache.tilemap.get(MAP_KEY)?.data as TiledMapJson;
     this.grid = buildSolidityGrid(mapJson);
+
+    // Sight grid: walls (lit or not) block vision; water doesn't (addendum 7).
+    this.cone = new VisionCone(this, buildSolidityGrid(mapJson, ["wallCollision", "litWallCollision"]));
 
     registerPlayerAnimations(this);
     registerZombieAnimations(this);
@@ -310,6 +315,10 @@ export class ArenaScene extends Phaser.Scene {
       .setDepth(7);
 
     if (isLocal) {
+      // Local player always visible — depth above the darkness rect, no mask.
+      sprite.setDepth(45);
+      gun.setDepth(46);
+      label.setDepth(47);
       // Seed the seq counter past the server's watermark so a mid-game
       // reconnect doesn't send seqs the replay guard has already acked.
       this.prediction = new LocalPrediction(simFromPlayer(player), this.grid, player.lastProcessedInput + 1);
@@ -319,6 +328,12 @@ export class ArenaScene extends Phaser.Scene {
       }) as unknown as () => void;
       this.views.set(sessionId, { player, sprite, gun, label, interp: null, prevImmuneUntil: player.immuneUntil, unsubscribe });
     } else {
+      // Remote players hidden outside the vision cone.
+      if (this.cone) {
+        sprite.setMask(this.cone.mask);
+        gun.setMask(this.cone.mask);
+        label.setMask(this.cone.mask);
+      }
       const interp = new RemoteInterpolation();
       interp.push(player.x, player.y, player.dir);
       const unsubscribe = player.onChange(() => {
@@ -342,7 +357,7 @@ export class ArenaScene extends Phaser.Scene {
     const sprite = this.add
       .sprite(bullet.x, bullet.y, GUN_ATLAS, gunForLevel(bullet.level).bulletFrame)
       .setRotation(Math.atan2(bullet.vy, bullet.vx))
-      .setDepth(4);
+      .setDepth(44);
     const unsubscribe = bullet.onChange(() => {
       sprite.setPosition(bullet.x, bullet.y); // server patch corrects dead reckoning
     }) as unknown as () => void;
@@ -360,6 +375,7 @@ export class ArenaScene extends Phaser.Scene {
   private addZombie(id: string, zombie: ZombieView): void {
     const sprite = this.add.sprite(zombie.x, zombie.y, ZOMBIE_ATLAS, "zombieWalk1.png").setDepth(5);
     sprite.play(ZOMBIE_ANIM.walk);
+    if (this.cone) sprite.setMask(this.cone.mask);
     const interp = new RemoteInterpolation();
     interp.push(zombie.x, zombie.y, 0);
     const unsubscribe = zombie.onChange(() => {
@@ -377,6 +393,7 @@ export class ArenaScene extends Phaser.Scene {
       .setFlipX(view.sprite.flipX)
       .setDepth(5);
     corpse.play(ZOMBIE_ANIM.dead);
+    if (this.cone) corpse.setMask(this.cone.mask);
     this.time.delayedCall(ZOMBIE_CORPSE_MS, () => corpse.destroy());
     view.sprite.destroy();
     this.zombieViews.delete(id);
@@ -445,7 +462,7 @@ export class ArenaScene extends Phaser.Scene {
 
   private onShot(shot: ShotEvent): void {
     // Muzzle flash for everyone.
-    const flash = this.add.circle(shot.x, shot.y, 4, 0xffffaa).setDepth(8);
+    const flash = this.add.circle(shot.x, shot.y, 4, 0xffffaa).setDepth(48);
     this.time.delayedCall(80, () => flash.destroy());
     if (shot.shooterId === this.localSessionId) {
       this.sound.play("shot", { volume: 1 });
@@ -576,6 +593,8 @@ export class ArenaScene extends Phaser.Scene {
     pointer.updateWorldPoint(this.cameras.main);
     this.crosshair.setPosition(pointer.worldX, pointer.worldY);
 
+    if (local && this.cone) this.cone.update(local.sprite.x, local.sprite.y, this.localAimAngle);
+
     // HUD + local-player sound triggers (all schema-transition driven; the
     // reload bar runs off the locally-observed start, never the server clock).
     const me = this.room.state.players.get(this.localSessionId);
@@ -629,6 +648,8 @@ export class ArenaScene extends Phaser.Scene {
     this.pickupSprites.forEach((sprite) => sprite.destroy());
     this.pickupSprites.clear();
     this.prediction = null;
+    this.cone?.destroy();
+    this.cone = null;
     // Drop the E2E debug hook — otherwise it dangles holding the destroyed scene graph.
     delete (window as unknown as { __arena?: unknown }).__arena;
   }
