@@ -29,8 +29,8 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | **1. Foundation** | Monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world | ✅ Shipped — live at https://genzed.fly.dev |
 | **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | ✅ Shipped |
 | **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ✅ Shipped — merged to `master` 2026-06-10 |
-| **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Shipped — merged to `master` 2026-06-11 |
-| **4B. Combat — Zombies + pickups** | Zombie spawner, weapon pickups, kill-feed, chat, vision cone | ⬜ Not started |
+| **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Built and verified on `stage-4a-combat` — not yet merged |
+| **4B. Combat — Zombies + pickups** | Zombie spawner, health/speed pickups, chat, vision cone | ⬜ Not started |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
 
 Each stage gets its own spec → plan → build cycle.
@@ -133,19 +133,27 @@ Branch `stage-3-movement`. Adds:
 
 ## Stage 4A — what shipped
 
-Branch `stage-4a-combat`, shipped 2026-06-11. Merged to `master`.
+Branch `stage-4a-combat`, built and verified 2026-06-11. **Not yet merged to `master`.**
 
-Server-authoritative combat is live: a gun-game ladder (Pistol → Shotgun → SMG → Assault Rifle → Sniper → LMG) where kills promote the shooter and demote the victim; 5 kills at LMG wins. The sim-state was refactored so `stepPlayer` (shared) accepts a full `PlayerSim` struct and returns it, enabling exact client-prediction replay and a parity test (server replay ≡ client replay for a 10-step sequence). Bullets travel server-side at up to 16 substeps per tick against the wall-collision grid (285 tiles); player AABB hit-testing detects them. On kill the victim respawns at a random legacy spawn point; on win the phase FSM emits the win banner and auto-returns to lobby. The client renders bullets as flashing sprites, shows a HUD (hearts, ammo pip-bar, gun name, kill-feed, win banner), plays fire/hit/reload/active-reload audio cues from the legacy asset atlas, and runs three combat-specific E2E specs (fire/hit, kill/respawn, win banner).
+- **Colyseus client alignment:** `colyseus.js` bumped to 0.15.28; single `@colyseus/schema@2.0.37` across server + client.
+- **Legacy assets ported verbatim:** gun + UI sprite atlases and 8 sound files copied from `legacy/client/assets/` into `client/public/assets/`.
+- **Gun ladder in `shared/src/tuning.ts`:** Pistol → SMG → Sniper → Heavy → Melee; level 6 = win state (5 kills). Constants cell-for-cell test-pinned.
+- **Sim-state refactor:** `stepPlayer(grid, sim, input)` signature with a roll FSM (600 ms roll, 1000 ms cooldown from start; input-mask encodes roll direction including diagonals via `rollDirMask` uint8) shared by server tick and client prediction. Parity-tested with exact float equality: 3×400 seeded-random inputs at reconcile cadences 1/3/7, a 10-input lagged-ack scenario, and mid-roll reconciles.
+- **Combat schema:** `hp`, `gunLevel`, `ammo` (-1 = infinite), `reloadStartedAt`, `aimAngle`, `immuneUntil`, `Bullet` map, `tick`, `winnerName`. React sync narrowed to phase/countdown/membership only — no 20 Hz re-renders.
+- **Server-gated commands:** fire/reload/active-reload; active-reload success window [1350, 1650] ms from server reload start; miss jams until `attempt + 3500 ms`.
+- **Substepped bullet integration:** ≤16 px samples (sniper at 50 px/tick takes 4 substeps) against a `wallCollision`-only bullet grid (285 solid tiles vs the player grid's 411) plus player AABBs.
+- **Kill resolution:** victim respawns at a random legacy spawn with 1 s immunity (victim keeps their gun level); shooter advances +1 level with a fresh clip; rank-change feed lines use legacy-verbatim strings.
+- **Win condition:** reach level 6 → `"ended"` phase + win banner → 10 s → lobby reset.
+- **Client combat layer:** per-player gun sprites rotated to aim angle, crosshair cursor, dead-reckoned bullet sprites, legacy roll animations, immunity tint. HUD: 10 hearts, ammo box with 3× gun icon and `n / clip` text, rank medal, 30-frame reload bar (green success / red jam), kill feed (3 s TTL), win banner. 8 legacy sounds with distance falloff.
+- **Combat E2E spec** (`tests/combat.spec.ts`): teleport to a verified line-of-sight pair → fire → bob's hp drops → "has slain" feed on both clients → alice at gun level 2 → bob respawned. Suite total: 3 specs (smoke, movement, combat).
 
 **Operational notes:**
 
-- `MSG_DEV_TELEPORT` test seam exists; registered only when `NODE_ENV !== "production"` (Docker image sets `production`; Fly uses the Docker image). `MSG_END_GAME` dev reset remains unconditional (pre-existing).
-- `EVT_RELOAD_RESULT` is a targeted server→client event (not in the spec's broadcast list); rationale: jam/success audio needs instant feedback that schema state alone can't give without a race. See plan "Plan addenda" §1.
-- `rollDirMask` (uint8) replaces the spec's `rollDir: DIR_*` — encodes diagonal rolls; see plan addenda §3.
-- `ArenaState.tick` (uint32) added beyond the spec — needed by `Bullet.spawnTick` for flight-time math; see plan addenda §4.
-- Bullet collision grid = `wallCollision` only (285 tiles) vs player grid (411 tiles). Players can stand on tiles that don't block bullets — accepted at prototype tier.
-- **Stage 5 notes:** `themeLoop.wav` is 6.1 MB uncompressed (convert to ogg/mp3 before deploy). Active-reload success flash may be imperceptible (~0–50 ms HUD tint) — hold ~150 ms if playtest confirms. Client fire self-gate has zero jitter tolerance (shots can be silently dropped on bad links — server re-gates anyway).
-- Stage 4B (zombies/pickups/chat/vision cone) is the next plan.
+- `MSG_DEV_TELEPORT` test seam is registered only when `NODE_ENV !== "production"` (the Docker image sets `production`; Fly uses that image). The dev `MSG_END_GAME` reset remains unconditional (pre-existing).
+- Plan addenda vs the spec (documented in the plan's "Plan addenda" section): `EVT_RELOAD_RESULT` as a targeted event; `rollDirMask` uint8 instead of a 4-way `rollDir`; `ArenaState.tick`.
+- Stricter input validation orphans pre-4A clients: a stale open tab from before this deploy will have movement silently dropped until refresh.
+- **Stage 5 notes:** `themeLoop.wav` is 6.1 MB uncompressed — convert to ogg/mp3 before deploy. Active-reload success flash may be imperceptible (~0–50 ms) — hold ~150 ms if playtest confirms. Client fire self-gate has zero jitter tolerance (shots may be silently dropped on bad links; server re-gates anyway).
+- **Next:** slice 4B — zombies, health/speed pickups, chat, vision cone (own plan).
 
 ## Verification (Stage 4A)
 
@@ -153,16 +161,13 @@ Server-authoritative combat is live: a gun-game ladder (Pistol → Shotgun → S
 | --- | --- |
 | `pnpm typecheck` | ✅ clean across all packages |
 | `pnpm lint` | ✅ clean |
-| `pnpm test` | ✅ server unit + combat integration tests pass |
-| `pnpm test:e2e` | ✅ lobby smoke + movement + combat specs pass |
-| `pnpm dev` (browser) | ✅ two-player fight with HUD, bullets, kill-feed visible — `docs/stage4-evidence/4a-dev-fight.png` |
-| `pnpm build` + prod server (browser) | ✅ same on one port, teleport seam works in prod bundle — `docs/stage4-evidence/4a-prod-fight.png` |
-| `docker build` + `docker run` | ⚠️ Docker daemon requires GUI interaction in this session — not captured; dev + prod bundle confirm the code path |
+| `pnpm test` | ✅ 75 tests / 10 files (Vitest) |
+| `pnpm test:e2e` | ✅ 3/3 in dev AND 3/3 re-run against prod bundle (`PORT=8080 node server/dist/index.js`) |
+| `pnpm dev` (browser) | ✅ alice kills bob; kill-feed "alice has slain bob" visible on bob's page; alice advances to gun level 2 — `docs/stage4-evidence/4a-dev-fight.png` |
+| `pnpm build` + prod server (browser) | ✅ same on one port; teleport seam confirmed active in prod bundle — `docs/stage4-evidence/4a-prod-fight.png` |
+| `docker build` + `docker run` | ⚠️ PENDING — Docker daemon unavailable on this dev machine. Dockerfile and `fly.toml` are byte-identical to Stage 3's verified build. Run the Docker smoke before or at deploy. |
 
 ## Known sharp edges for Stage 4
 
-- **Real `end_game` trigger isn't wired** — Stage 4 wires it to win conditions; for now only the dev message handler exists.
-- **`fly.toml` `min_machines_running = 0`** + `auto_stop_machines` will kill in-flight games. Bump to `1` once there's real session state.
-- **Client/server Colyseus version skew** (`colyseus.js@0.15.26` vs server `@0.15.57`) — both resolve `@colyseus/schema@2.0.37` so the wire protocol matches today, but align before further wire-protocol work.
-- **Roll/dodge, mouse aim, combat all deferred to Stage 4.**
+- **`fly.toml` `min_machines_running = 0`** + `auto_stop_machines` will kill in-flight games. Bump to `1` once there is real session state.
 - **E2E runs with `workers: 1`** — parallel spec files would share the single lobby room.
