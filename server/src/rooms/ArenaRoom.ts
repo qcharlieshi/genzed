@@ -244,7 +244,7 @@ export class ArenaRoom extends Room<ArenaState> {
     // 2. Bullets: substepped integration vs bullet grid + player AABBs.
     const targets: Target[] = [];
     this.state.players.forEach((p, id) => {
-      targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now });
+      targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now, kind: "player" });
     });
     const hits = stepBullets(this.bulletGrid, this.state.bullets, this.bulletMeta, targets, this.state.tick);
     for (const hit of hits) {
