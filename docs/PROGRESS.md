@@ -191,7 +191,7 @@ Branch `stage-4b-world`, built and verified 2026-06-12. Not yet merged.
 
 **Pickups:**
 - Health pack: +30 hp below 70 threshold; at/above 70 → set to 100. Legacy rule from `managePickups.js:84-87`.
-- Speed boost: +100 px/s, threads through existing `Player.speedBonus` field (refreshes, never stacks — plan deviation 4). Expires after 5 s; `computeSpeedBonus` composes the L5 gun bonus and the live pickup so level-up in `resolveHit` can't clobber an active pickup.
+- Speed boost: +100 px/s, threads through existing `Player.speedBonus` field (refreshes, never stacks — spec deviation 4). Expires after 5 s; `computeSpeedBonus` composes the L5 gun bonus and the live pickup so level-up in `resolveHit` can't clobber an active pickup.
 - Pickup respawn: 8 s cycling to a random unoccupied slot (11 legacy slots, verbatim from `managePickups.js:26-36`).
 - Initial layout: health @ slots 4 + 1, speed @ slots 6 + 8. Feed lines port legacy strings verbatim.
 - Client prediction needs zero new code — `speedBonus` is already a `PlayerSim` field tracked by reconciliation.
@@ -206,7 +206,7 @@ Branch `stage-4b-world`, built and verified 2026-06-12. Not yet merged.
 - Client-only rendering using one `Phaser.GameObjects.Graphics` object and two `Phaser.Display.Masks.GeometryMask` instances: one normal mask revealing lit pixels, one inverted mask darkening the rest.
 - 60 rays cast at 90° × 270 px, using the `wallCollision ∪ litWallCollision` grid (plan addendum 7 — player grid would make water opaque; bullet grid would let lit walls leak).
 - Darkness alpha 0.7 (legacy `Lighting.js:29`). The cone follows the local player's aim angle (mouse position) every frame.
-- Remote players and zombies/pickups are only visible inside the local player's cone.
+- Remote players and zombies (incl. corpses) are only visible inside the local player's cone. Pickups are full-bright everywhere (depth 43, no mask — legacy render order), as are bullets, the local player, and the HUD.
 
 **Plan addenda vs the spec (all 7 summarized):**
 1. Spawn/slot validation is test-pinned (not boot-time runtime nudging) — 3 zombie spawn points nudged in constants, 11 pickup slots validated by center-tile floor check. Pinned by `world.test.ts`.
