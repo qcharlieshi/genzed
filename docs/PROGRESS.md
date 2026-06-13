@@ -30,7 +30,7 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | ✅ Shipped |
 | **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ✅ Shipped — merged to `master` 2026-06-10 |
 | **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Built and verified on `stage-4a-combat` — not yet merged |
-| **4B. Combat — Zombies + pickups** | Zombie spawner, health/speed pickups, chat, vision cone | ⬜ Not started |
+| **4B. Combat — Zombies + pickups** | Zombie spawner, health/speed pickups, chat, vision cone | ✅ Built and verified on `stage-4b-world` — not yet merged |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
 
 Each stage gets its own spec → plan → build cycle.
@@ -175,3 +175,72 @@ Branch `stage-4a-combat`, built and verified 2026-06-11. **Merged to `master` 20
 
 - **`fly.toml` `min_machines_running = 0`** + `auto_stop_machines` will kill in-flight games. Bump to `1` once there is real session state.
 - **E2E runs with `workers: 1`** — parallel spec files would share the single lobby room.
+
+## Stage 4B — what shipped
+
+Branch `stage-4b-world`, built and verified 2026-06-12. Not yet merged.
+
+**Zombie spawner + AI:**
+- Server-stepped zombies on the 20 Hz tick, reusing the shared `move()` AABB sweep for wall-sliding navigation (4.55 px/tick at 91 px/s, well under the 32 px precondition).
+- Targeting: nearest player (spec deviation 1 — legacy selected the farthest). Greedy steering, no pathfinding.
+- In attack range (28 px): zombie stands still and swings every 1 s; attacks skip immune players. Zombie deals 5 hp per attack.
+- One-hit kill by any bullet; corpse anim plays 4 s then the Zombie schema entry is deleted.
+- Spawner: one zombie per 4000 ms (**INVENTED** — playtest-tune) up to 8 alive (**INVENTED** — playtest-tune). Game-reset and win clear all zombies.
+- 8 spawn points ported from `legacy/enemyGenerator.js` (10 → 8 unique); 3 nudged ≤16 px into verified-open floor: `(250,250)→(266,250)`, `(700,700)→(700,716)`, `(800,800)→(784,800)`. Pinned against the real map by `world.test.ts`.
+- Zombie kills produce no kill-feed line and no gun-level credit (legacy-verified, plan addendum 4).
+
+**Pickups:**
+- Health pack: +30 hp below 70 threshold; at/above 70 → set to 100. Legacy rule from `managePickups.js:84-87`.
+- Speed boost: +100 px/s, threads through existing `Player.speedBonus` field (refreshes, never stacks — plan deviation 4). Expires after 5 s; `computeSpeedBonus` composes the L5 gun bonus and the live pickup so level-up in `resolveHit` can't clobber an active pickup.
+- Pickup respawn: 8 s cycling to a random unoccupied slot (11 legacy slots, verbatim from `managePickups.js:26-36`).
+- Initial layout: health @ slots 4 + 1, speed @ slots 6 + 8. Feed lines port legacy strings verbatim.
+- Client prediction needs zero new code — `speedBonus` is already a `PlayerSim` field tracked by reconciliation.
+
+**Chat relay:**
+- Server-gated relay: ≤200 chars (trimmed), 1 message/s per player, active only in `playing`/`ended` phases.
+- TAB toggle overlay in React (`ChatOverlay.tsx`) mounts over the Phaser canvas in `GameMount.tsx`; full keyboard input suppression while open (no movement, no fire, no roll while typing).
+- Chat box closes on send (legacy behavior). Messages visible only while the overlay is open (no persistent HUD history). No unread indicator — messages are invisible until TAB.
+- Chat placeholder: `Talk some smack here...` (legacy verbatim).
+
+**Vision cone (SHIPPED — not cut):**
+- Client-only rendering using one `Phaser.GameObjects.Graphics` object and two `Phaser.Display.Masks.GeometryMask` instances: one normal mask revealing lit pixels, one inverted mask darkening the rest.
+- 60 rays cast at 90° × 270 px, using the `wallCollision ∪ litWallCollision` grid (plan addendum 7 — player grid would make water opaque; bullet grid would let lit walls leak).
+- Darkness alpha 0.7 (legacy `Lighting.js:29`). The cone follows the local player's aim angle (mouse position) every frame.
+- Remote players and zombies/pickups are only visible inside the local player's cone.
+
+**Plan addenda vs the spec (all 7 summarized):**
+1. Spawn/slot validation is test-pinned (not boot-time runtime nudging) — 3 zombie spawn points nudged in constants, 11 pickup slots validated by center-tile floor check. Pinned by `world.test.ts`.
+2. `EVT_ZOMBIE_ATTACK { x, y }` broadcast added — clients need it to spatially play `zombieHit.wav` (server-side attacks are otherwise invisible to the client).
+3. Two zombie dev seams (`MSG_DEV_ZOMBIE_SPAWNING`, `MSG_DEV_SPAWN_ZOMBIE`) registered under the same `NODE_ENV !== "production"` guard as `MSG_DEV_TELEPORT` — spawner disable keeps E2E assertions deterministic; explicit spawn bypasses greedy-steering flakiness.
+4. Zombie kills produce no feed line and no credit — verified in legacy `enemy.js:30-40` (`receiveDamage` called with no killer, so the slain-line branch never ran).
+5. Zombies stand still in attack range (no orbiting) — legacy pathfinding returned empty path at range.
+6. Chat gates to `playing`/`ended` only; closes on send; messages show only while overlay is open.
+7. Vision cone sight grid = `wallCollision` + `litWallCollision` — a third grid compiled at scene create. Player grid would make water opaque; bullet grid would let lit-wall sprites leak light.
+
+**Operational notes:**
+- `MSG_DEV_TELEPORT`, `MSG_DEV_ZOMBIE_SPAWNING`, `MSG_DEV_SPAWN_ZOMBIE` are all registered only when `NODE_ENV !== "production"` — the Fly Docker image sets `production`, so these seams are test-only.
+- `arenaCombat.test.ts` fixtures disable the spawner on startup (`c1.send(MSG_DEV_ZOMBIE_SPAWNING, { enabled: false })`) to prevent zombie hp-chip interfering with the respawn-hp assertions over long fixture windows.
+- The `PW_BASE_URL` env var was added to `playwright.config.ts` in this task — callers can point E2E at any running server (prod bundle at `:8080`, CI dev stack, etc.) without changing the config.
+
+## Verification (Stage 4B)
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | ✅ clean across all packages |
+| `pnpm lint` | ✅ clean |
+| `pnpm test` (Node 20 CI-faithful: `mise x node@20.18.0 -- pnpm -C server test`) | ✅ 100 tests / 14 files |
+| `pnpm test:e2e` (dev stack, `CI=1`) | ✅ 4/4 (smoke, movement, combat, world) |
+| `pnpm build` + prod-bundle E2E (`PW_BASE_URL=http://localhost:8080`) | ✅ 4/4 — NODE_ENV unset keeps dev seams active in prod bundle, same as 4A |
+| `pnpm dev` (browser) | ✅ zombies converge on alice, pickup feed "alice has picked up a health pack!", hp drops from zombie attacks, cone visible — `docs/stage4-evidence/4b-zombies.png` |
+| Chat overlay | ✅ TAB opens overlay on alice; "gg ez" relayed and visible on bob's screen — `docs/stage4-evidence/4b-chat.png` |
+| Vision cone | ✅ one Graphics + two GeometryMasks, 60 rays, 90° × 270 px, 0.7 darkness — `docs/stage4-evidence/4b-cone.png` |
+| `docker build` + `docker run` | ⚠️ PENDING — Docker daemon unavailable on this dev machine. Dockerfile is byte-identical to Stage 3's and 4A's verified build. Run the Docker smoke before or at deploy. |
+
+## Stage 5 — carry-forward notes
+
+(Appended from 4B)
+
+- **Chat has no unread indicator** — messages are invisible until TAB; a badge or glow on the TAB key would be a natural Stage-5 addition.
+- **Zombie groan volume curve is legacy-quirky** — the `-0.2` distance offset in the legacy audio code produces subtly non-linear attenuation; may need playtest rebalancing.
+- **Spawner numbers need playtest tuning** — `ZOMBIE_SPAWN_INTERVAL_MS=4000` and `ZOMBIE_MAX_ALIVE=8` are invented starting guesses, not legacy-derived.
+- **`themeLoop.wav` 6.1 MB conversion still outstanding** — convert to ogg/mp3 before the next Fly deploy (carried from 4A Stage-5 notes).
