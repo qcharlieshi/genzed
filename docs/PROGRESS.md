@@ -29,7 +29,7 @@ Living tracker for the 2017 → 2026 rewrite. Updated as stages land.
 | **1. Foundation** | Monorepo, server shell, client shell, Docker, Fly, CI, deployable hello-world | ✅ Shipped — live at https://genzed.fly.dev |
 | **2. Lobby + room lifecycle** | Name entry, host-starts, phase FSM, 2-player minimum, 10s reconnection grace, placeholder arena | ✅ Shipped |
 | **3. Movement + rendering** | Tiled map load, server-authoritative movement, client prediction + interpolation | ✅ Shipped — merged to `master` 2026-06-10 |
-| **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Built and verified on `stage-4a-combat` — not yet merged |
+| **4A. Combat — PvP GunGame** | Gun ladder, bullets, kills/respawn/win FSM, HUD, sounds, combat E2E | ✅ Shipped — merged to `master` 2026-06-12 (`cd662729`) |
 | **4B. Combat — Zombies + pickups** | Zombie spawner, health/speed pickups, chat, vision cone | ✅ Built and verified on `stage-4b-world` — not yet merged |
 | **5. Polish + playtest** | Tune feel, fix prediction snap, side-by-side parity with the original | ⬜ Not started |
 
@@ -244,3 +244,5 @@ Branch `stage-4b-world`, built and verified 2026-06-12. Not yet merged.
 - **Zombie groan volume curve is legacy-quirky** — the `-0.2` distance offset in the legacy audio code produces subtly non-linear attenuation; may need playtest rebalancing.
 - **Spawner numbers need playtest tuning** — `ZOMBIE_SPAWN_INTERVAL_MS=4000` and `ZOMBIE_MAX_ALIVE=8` are invented starting guesses, not legacy-derived.
 - **`themeLoop.wav` 6.1 MB conversion still outstanding** — convert to ogg/mp3 before the next Fly deploy (carried from 4A Stage-5 notes).
+- **Zombies hunt disconnected players during the 10 s reconnection grace** — a dropped player stays frozen in `state.players`, so zombies converge and chip them (no credit, full-hp respawn on each kill). Same accepted class as 4A bullets hitting a ghost, but zombies *seek*; revisit if playtest says it feels unfair.
+- **`zombieSpawning` dev toggle persists across games in the same room** — deliberate: `arenaCombat`'s fixtures disable it before `MSG_START_GAME`, so a reset in `assignSpawns()` would re-enable the spawner mid-suite and reintroduce the flake the seam exists to prevent. Dev/test-only knob (`NODE_ENV !== "production"`); don't "fix" without re-proving the combat suite.
