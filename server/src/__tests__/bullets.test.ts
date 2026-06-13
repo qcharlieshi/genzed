@@ -48,17 +48,17 @@ describe("stepBullets", () => {
 
   it("a sniper-speed bullet cannot skip a player AABB", () => {
     const { bullets, meta } = arena(1000, 130);
-    const target: Target = { id: "v", x: 160, y: 80, immune: false }; // AABB x [152,168]
+    const target: Target = { id: "v", x: 160, y: 80, immune: false, kind: "player" }; // AABB x [152,168]
     const hits = stepBullets(makeGrid(35, 35), bullets, meta, [target], 1);
-    expect(hits).toEqual([{ victimId: "v", shooterId: "s", damage: 10 }]);
+    expect(hits).toEqual([{ victimId: "v", shooterId: "s", damage: 10, victimKind: "player" }]);
     expect(bullets.size).toBe(0);
   });
 
   it("never hits the shooter or immune targets (flies through)", () => {
     const { bullets, meta } = arena(200);
     const targets: Target[] = [
-      { id: "s", x: 85, y: 80, immune: false }, // the shooter, in the path
-      { id: "i", x: 88, y: 80, immune: true }, // immune, in the path
+      { id: "s", x: 85, y: 80, immune: false, kind: "player" }, // the shooter, in the path
+      { id: "i", x: 88, y: 80, immune: true, kind: "player" }, // immune, in the path
     ];
     const hits = stepBullets(makeGrid(35, 35), bullets, meta, targets, 1);
     expect(hits).toEqual([]);
@@ -71,9 +71,9 @@ describe("stepBullets", () => {
     if (!m) throw new Error("meta missing");
     m.diesAtTick = 1; // spawnTick 0 + 1 tick of life
     // A target 5 px ahead: the bullet must move (and hit) before expiring.
-    const target: Target = { id: "v", x: 85, y: 80, immune: false };
+    const target: Target = { id: "v", x: 85, y: 80, immune: false, kind: "player" };
     const hits = stepBullets(makeGrid(35, 35), bullets, meta, [target], 1);
-    expect(hits).toEqual([{ victimId: "v", shooterId: "s", damage: 10 }]);
+    expect(hits).toEqual([{ victimId: "v", shooterId: "s", damage: 10, victimKind: "player" }]);
     expect(bullets.size).toBe(0);
   });
 
@@ -81,5 +81,13 @@ describe("stepBullets", () => {
     const { bullets, meta } = arena(1000, 1115);
     stepBullets(makeGrid(35, 35), bullets, meta, [], 1);
     expect(bullets.size).toBe(0);
+  });
+
+  it("hits zombies with the same AABB and reports victimKind", () => {
+    const { bullets, meta } = arena(500); // from x=80, rightward
+    const zombie: Target = { id: "z1", x: 100, y: 80, immune: false, kind: "zombie" };
+    const hits = stepBullets(makeGrid(35, 35), bullets, meta, [zombie], 1);
+    expect(hits).toEqual([{ victimId: "z1", shooterId: "s", damage: 10, victimKind: "zombie" }]);
+    expect(bullets.size).toBe(0); // bullet consumed by the hit
   });
 });

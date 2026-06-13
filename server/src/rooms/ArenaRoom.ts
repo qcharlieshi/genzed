@@ -12,6 +12,13 @@ import {
   EVT_SHOT,
   EVT_LOG,
   EVT_RELOAD_RESULT,
+  EVT_ZOMBIE_ATTACK,
+  MSG_DEV_ZOMBIE_SPAWNING,
+  MSG_DEV_SPAWN_ZOMBIE,
+  MSG_CHAT,
+  EVT_CHAT,
+  CHAT_MAX_LEN,
+  CHAT_INTERVAL_MS,
   WIN_GUN_LEVEL,
   RELOAD_MS,
   RELOAD_JAM_TOTAL_MS,
@@ -27,6 +34,15 @@ import {
   PLAYER_HEALTH,
   WORLD_WIDTH,
   WORLD_HEIGHT,
+  ZOMBIE_SPAWN_INTERVAL_MS,
+  ZOMBIE_MAX_ALIVE,
+  ZOMBIE_SPAWN_POINTS,
+  PICKUP_KIND_HEALTH,
+  SPEED_PICKUP_BONUS,
+  SPEED_PICKUP_MS,
+  PICKUP_RESPAWN_MS,
+  PICKUP_SLOTS,
+  PICKUP_INITIAL,
   gunForLevel,
   stepPlayer,
   type InputMessage,
@@ -37,10 +53,16 @@ import {
   type DevTeleportMessage,
   type LogEvent,
   type LogKind,
+  type ZombieAttackEvent,
+  type DevZombieSpawningMessage,
+  type ChatMessage,
+  type ChatEvent,
 } from "@genzed/shared";
-import { ArenaState, Player, Bullet } from "../schema/ArenaState.js";
+import { ArenaState, Player, Bullet, Zombie, Pickup } from "../schema/ArenaState.js";
 import { loadSolidityGrid, loadBulletGrid } from "../sim/collision.js";
 import { stepBullets, type BulletMeta, type Hit, type Target } from "../sim/bullets.js";
+import { stepZombies, type ZombieMeta } from "../sim/zombies.js";
+import { applyHealthPickup, overlapsPickup, pickRespawnSlot } from "../sim/pickups.js";
 
 const MAX_CLIENTS = 4;
 const MIN_TO_START = 2;
@@ -52,6 +74,7 @@ const MAX_QUEUED_INPUTS = 10;
 // jitter; capping it stops an input flood from becoming a speed cheat (a full
 // 10-deep drain per 50 ms tick would be 10x movement speed).
 const MAX_INPUTS_PER_TICK = 2;
+const ZOMBIE_SPAWN_TICKS = ZOMBIE_SPAWN_INTERVAL_MS / TICK_MS; // 80 ticks = 4 s
 
 function isInputMessage(m: unknown): m is InputMessage {
   if (typeof m !== "object" || m === null) return false;
@@ -78,6 +101,8 @@ type CombatMeta = {
   damageBonusUntil: number;
   bulletCounter: number;
   prevRank: number; // rank-change feed lines (Task 7)
+  speedBoostUntil: number; // server-clock ms; 0 = no speed pickup active
+  nextChatAt: number;
 };
 
 function freshCombatMeta(): CombatMeta {
@@ -88,7 +113,18 @@ function freshCombatMeta(): CombatMeta {
     damageBonusUntil: 0,
     bulletCounter: 0,
     prevRank: 0,
+    speedBoostUntil: 0,
+    nextChatAt: 0,
   };
+}
+
+// speedBonus is the SUM of its two sources — the L5 gun bonus and a live
+// speed pickup. Every write to player.speedBonus goes through here so one
+// source can't clobber the other.
+function computeSpeedBonus(player: Player, speedBoostUntil: number, now: number): number {
+  return (
+    (player.gunLevel === 5 ? GUN_L5_SPEED_BONUS : 0) + (speedBoostUntil > now ? SPEED_PICKUP_BONUS : 0)
+  );
 }
 
 const PLACES = ["1st", "2nd", "3rd", "4th"] as const;
@@ -102,6 +138,16 @@ function isDevTeleportMessage(m: unknown): m is DevTeleportMessage {
     typeof o.y === "number" &&
     Number.isFinite(o.y)
   );
+}
+
+function isDevZombieSpawningMessage(m: unknown): m is DevZombieSpawningMessage {
+  if (typeof m !== "object" || m === null) return false;
+  return typeof (m as Record<string, unknown>).enabled === "boolean";
+}
+
+function isChatMessage(m: unknown): m is ChatMessage {
+  if (typeof m !== "object" || m === null) return false;
+  return typeof (m as Record<string, unknown>).text === "string";
 }
 
 function isFireMessage(m: unknown): m is FireMessage {
@@ -129,6 +175,13 @@ export class ArenaRoom extends Room<ArenaState> {
   private bulletGrid = loadBulletGrid();
   private combat = new Map<string, CombatMeta>();
   private bulletMeta = new Map<string, BulletMeta>();
+  private zombieMeta = new Map<string, ZombieMeta>();
+  private zombieCounter = 0;
+  private zombieSpawning = true; // dev seam can disable for E2E determinism
+  private nextZombieSpawnTick = 0; // anchored at game start (state.tick never resets)
+  private pickupSlotById = new Map<string, number>(); // live pickup id → slot index
+  private pickupCounter = 0;
+  private pickupRespawns: Array<{ kind: number; at: number }> = [];
 
   override onCreate(): void {
     this.setState(new ArenaState());
@@ -138,10 +191,24 @@ export class ArenaRoom extends Room<ArenaState> {
     this.onMessage(MSG_FIRE, (client, message: unknown) => this.handleFire(client, message));
     this.onMessage(MSG_RELOAD, (client) => this.handleReload(client));
     this.onMessage(MSG_ACTIVE_RELOAD, (client) => this.handleActiveReload(client));
+    this.onMessage(MSG_CHAT, (client, message: unknown) => this.handleChat(client, message));
     if (process.env.NODE_ENV !== "production") {
       this.onMessage(MSG_DEV_TELEPORT, (client, message: unknown) =>
         this.handleDevTeleport(client, message),
       );
+      this.onMessage(MSG_DEV_ZOMBIE_SPAWNING, (_client, message: unknown) => {
+        if (!isDevZombieSpawningMessage(message)) return;
+        this.zombieSpawning = message.enabled;
+        if (!message.enabled) {
+          this.state.zombies.clear();
+          this.zombieMeta.clear();
+        }
+      });
+      this.onMessage(MSG_DEV_SPAWN_ZOMBIE, (_client, message: unknown) => {
+        if (this.state.phase !== "playing") return;
+        if (!isDevTeleportMessage(message)) return; // same { x, y } finite-number shape
+        this.spawnZombieAt(message.x, message.y);
+      });
     }
     this.setSimulationInterval(() => this.tick(), TICK_MS);
   }
@@ -240,17 +307,53 @@ export class ArenaRoom extends Room<ArenaState> {
         player.ammo = gunForLevel(player.gunLevel).clip;
         player.reloadStartedAt = 0;
       }
+      if (meta.speedBoostUntil > 0 && now >= meta.speedBoostUntil) {
+        meta.speedBoostUntil = 0;
+        player.speedBonus = computeSpeedBonus(player, 0, now);
+      }
     });
     // 2. Bullets: substepped integration vs bullet grid + player AABBs.
     const targets: Target[] = [];
     this.state.players.forEach((p, id) => {
-      targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now });
+      targets.push({ id, x: p.x, y: p.y, immune: p.immuneUntil > now, kind: "player" });
+    });
+    this.state.zombies.forEach((z, id) => {
+      targets.push({ id, x: z.x, y: z.y, immune: false, kind: "zombie" });
     });
     const hits = stepBullets(this.bulletGrid, this.state.bullets, this.bulletMeta, targets, this.state.tick);
     for (const hit of hits) {
       if (this.state.phase !== "playing") break; // a hit in this batch just ended the game
       this.resolveHit(hit, now);
     }
+
+    if (this.state.phase !== "playing") return; // a bullet kill may have ended the game
+
+    // 3. Zombies: retarget nearest, steer, attack.
+    const playerTargets = targets.filter((t) => t.kind === "player");
+    const attacks = stepZombies(this.grid, this.state.zombies, this.zombieMeta, playerTargets, now);
+    for (const attack of attacks) {
+      const victim = this.state.players.get(attack.victimId);
+      if (!victim) continue;
+      // playerTargets carries pre-bullet immune flags — a bullet kill this
+      // same tick already respawned (and immunized) the victim; re-check.
+      if (victim.immuneUntil > now) continue;
+      victim.hp = Math.max(0, victim.hp - attack.damage); // uint8 — never assign negative
+      const evt: ZombieAttackEvent = { x: attack.x, y: attack.y };
+      this.broadcast(EVT_ZOMBIE_ATTACK, evt);
+      // Zombie kills: respawn only — no feed line, no credit (legacy-verified, addendum 4).
+      if (victim.hp === 0) this.respawn(victim, now);
+    }
+
+    // 4a. Zombie spawner: one per interval up to the cap. Anchored to a
+    // next-spawn tick set at game start — state.tick never resets across
+    // games, so a modulo check would drift later games' first spawn.
+    if (this.zombieSpawning && this.state.tick >= this.nextZombieSpawnTick) {
+      this.nextZombieSpawnTick = this.state.tick + ZOMBIE_SPAWN_TICKS;
+      if (this.state.zombies.size < ZOMBIE_MAX_ALIVE) this.spawnZombie();
+    }
+
+    // 4b. Pickups: collection by player-AABB overlap, then respawn timers.
+    this.tickPickups(now);
   }
 
   private handleFire(client: Client, message: unknown): void {
@@ -342,6 +445,21 @@ export class ArenaRoom extends Room<ArenaState> {
     client.send(EVT_RELOAD_RESULT, result);
   }
 
+  private handleChat(client: Client, message: unknown): void {
+    if (this.state.phase !== "playing" && this.state.phase !== "ended") return;
+    if (!isChatMessage(message)) return;
+    const player = this.state.players.get(client.sessionId);
+    const meta = this.combat.get(client.sessionId);
+    if (!player || !meta) return;
+    const text = message.text.trim();
+    if (text.length === 0 || text.length > CHAT_MAX_LEN) return;
+    const now = Date.now();
+    if (now < meta.nextChatAt) return; // 1/s per player
+    meta.nextChatAt = now + CHAT_INTERVAL_MS;
+    const evt: ChatEvent = { name: player.name, text };
+    this.broadcast(EVT_CHAT, evt);
+  }
+
   private assignSpawns(): void {
     const points = [...SPAWN_POINTS].sort(() => Math.random() - 0.5);
     let i = 0;
@@ -367,9 +485,16 @@ export class ArenaRoom extends Room<ArenaState> {
       i += 1;
     });
     this.state.bullets.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
+    this.nextZombieSpawnTick = this.state.tick + ZOMBIE_SPAWN_TICKS;
     this.state.winnerName = "";
     this.combat.forEach((_meta, sessionId) => this.combat.set(sessionId, freshCombatMeta()));
     this.bulletMeta.clear();
+    this.state.pickups.clear();
+    this.pickupSlotById.clear();
+    this.pickupRespawns = [];
+    for (const init of PICKUP_INITIAL) this.placePickup(init.kind, init.slot);
     this.announceRankChanges(false);
   }
 
@@ -404,6 +529,12 @@ export class ArenaRoom extends Room<ArenaState> {
   }
 
   private resolveHit(hit: Hit, now: number): void {
+    if (hit.victimKind === "zombie") {
+      // One-hit-kill, no credit, no feed line (spec). Client plays the corpse anim.
+      this.state.zombies.delete(hit.victimId);
+      this.zombieMeta.delete(hit.victimId);
+      return;
+    }
     const victim = this.state.players.get(hit.victimId);
     if (!victim) return;
     if (victim.immuneUntil > now) return; // killed-and-respawned earlier this same tick
@@ -421,7 +552,8 @@ export class ArenaRoom extends Room<ArenaState> {
     const gun = gunForLevel(shooter.gunLevel);
     shooter.ammo = gun.clip;
     shooter.reloadStartedAt = 0; // new gun arrives loaded
-    shooter.speedBonus = shooter.gunLevel === 5 ? GUN_L5_SPEED_BONUS : 0;
+    const shooterMeta = this.combat.get(hit.shooterId);
+    shooter.speedBonus = computeSpeedBonus(shooter, shooterMeta?.speedBoostUntil ?? 0, now);
     this.broadcastLog("levelup", `${shooter.name} has advanced to Gun Level: ${shooter.gunLevel}`);
     this.announceRankChanges(true);
   }
@@ -462,6 +594,8 @@ export class ArenaRoom extends Room<ArenaState> {
     this.broadcastLog("win", `${winner.name} has won the game!`);
     this.state.bullets.clear();
     this.bulletMeta.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
     this.winTimer = this.clock.setTimeout(() => {
       if (this.state.phase === "ended") this.resetToLobby();
     }, WIN_BANNER_MS);
@@ -475,6 +609,11 @@ export class ArenaRoom extends Room<ArenaState> {
     this.state.winnerName = "";
     this.state.bullets.clear();
     this.bulletMeta.clear();
+    this.state.zombies.clear();
+    this.zombieMeta.clear();
+    this.state.pickups.clear();
+    this.pickupSlotById.clear();
+    this.pickupRespawns = [];
     this.inputQueues.forEach((queue) => {
       queue.length = 0;
     });
@@ -493,5 +632,76 @@ export class ArenaRoom extends Room<ArenaState> {
     player.vx = 0;
     player.vy = 0;
     player.rollTicksLeft = 0;
+  }
+
+  private spawnZombie(): void {
+    const p = ZOMBIE_SPAWN_POINTS[Math.floor(Math.random() * ZOMBIE_SPAWN_POINTS.length)];
+    if (!p) return; // noUncheckedIndexedAccess; unreachable (non-empty table)
+    this.spawnZombieAt(p.x, p.y);
+  }
+
+  private spawnZombieAt(x: number, y: number): void {
+    const zombie = new Zombie();
+    zombie.x = x;
+    zombie.y = y;
+    const id = `z${this.zombieCounter}`;
+    this.zombieCounter += 1;
+    this.state.zombies.set(id, zombie);
+    this.zombieMeta.set(id, { nextAttackAt: 0 });
+  }
+
+  private placePickup(kind: number, slot: number): void {
+    const s = PICKUP_SLOTS[slot];
+    if (!s) return; // noUncheckedIndexedAccess; slot indices come from the table
+    const pickup = new Pickup();
+    pickup.x = s.x;
+    pickup.y = s.y;
+    pickup.kind = kind;
+    const id = `p${this.pickupCounter}`;
+    this.pickupCounter += 1;
+    this.state.pickups.set(id, pickup);
+    this.pickupSlotById.set(id, slot);
+  }
+
+  private tickPickups(now: number): void {
+    // Collection — first overlapping player wins; immune players may collect
+    // (legacy overlap had no immunity check).
+    const collected: string[] = [];
+    this.state.pickups.forEach((pickup, id) => {
+      let taken = false;
+      this.state.players.forEach((player, sessionId) => {
+        if (taken || !overlapsPickup(player.x, player.y, pickup.x, pickup.y)) return;
+        const meta = this.combat.get(sessionId);
+        if (!meta) return;
+        taken = true;
+        if (pickup.kind === PICKUP_KIND_HEALTH) {
+          player.hp = applyHealthPickup(player.hp);
+          this.broadcastLog("pickup", `${player.name} has picked up a health pack!`);
+        } else {
+          meta.speedBoostUntil = now + SPEED_PICKUP_MS; // refreshes, never stacks (deviation 4)
+          player.speedBonus = computeSpeedBonus(player, meta.speedBoostUntil, now);
+          this.broadcastLog("pickup", `${player.name} has picked up a speed boost!`);
+        }
+        this.pickupRespawns.push({ kind: pickup.kind, at: now + PICKUP_RESPAWN_MS });
+      });
+      if (taken) collected.push(id);
+    });
+    for (const id of collected) {
+      this.state.pickups.delete(id);
+      this.pickupSlotById.delete(id);
+    }
+    // Respawns due → random unoccupied slot (legacy strings).
+    if (this.pickupRespawns.length > 0) {
+      const due = this.pickupRespawns.filter((r) => now >= r.at);
+      this.pickupRespawns = this.pickupRespawns.filter((r) => now < r.at);
+      for (const r of due) {
+        const occupied = new Set(this.pickupSlotById.values());
+        const slot = pickRespawnSlot(occupied);
+        if (slot === -1) continue;
+        this.placePickup(r.kind, slot);
+        const item = r.kind === PICKUP_KIND_HEALTH ? "health pack" : "speed boost";
+        this.broadcastLog("pickup", `A new ${item} has been placed!`);
+      }
+    }
   }
 }

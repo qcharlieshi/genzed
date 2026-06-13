@@ -10,6 +10,8 @@ const browserGlobals = {
   console: "readonly",
   HTMLDivElement: "readonly",
   HTMLElement: "readonly",
+  HTMLInputElement: "readonly",
+  KeyboardEvent: "readonly",
   JSX: "readonly",
   setTimeout: "readonly",
   clearTimeout: "readonly",

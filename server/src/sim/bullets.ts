@@ -18,9 +18,9 @@ export type BulletMeta = {
   diesAtTick: number; // L5 lifetime; MAX_SAFE_INTEGER = until wall/world
 };
 
-export type Target = { id: string; x: number; y: number; immune: boolean };
+export type Target = { id: string; x: number; y: number; immune: boolean; kind: "player" | "zombie" };
 
-export type Hit = { victimId: string; shooterId: string; damage: number };
+export type Hit = { victimId: string; shooterId: string; damage: number; victimKind: "player" | "zombie" };
 
 const HW = PLAYER_W / 2;
 const HH = PLAYER_H / 2;
@@ -64,7 +64,7 @@ export function stepBullets(
       for (const t of targets) {
         if (t.id === m.shooterId || t.immune) continue;
         if (Math.abs(b.x - t.x) <= HW && Math.abs(b.y - t.y) <= HH) {
-          hits.push({ victimId: t.id, shooterId: m.shooterId, damage: m.damage });
+          hits.push({ victimId: t.id, shooterId: m.shooterId, damage: m.damage, victimKind: t.kind });
           dead.push(id);
           return;
         }
