@@ -43,3 +43,26 @@ export type LogEvent = { kind: LogKind; text: string };
 // from schema without racing normal completion; jam/success need instant FX).
 export const EVT_RELOAD_RESULT = "reload_result";
 export type ReloadResultEvent = { ok: boolean };
+
+// --- Stage 4B world layer ---
+
+export const MSG_CHAT = "chat";
+export type ChatMessage = { text: string };
+
+export const EVT_CHAT = "chat_line";
+export type ChatEvent = { name: string; text: string };
+
+// Plan addendum 2: positional zombieHit.wav — clients can't see server-side
+// attacks any other way.
+export const EVT_ZOMBIE_ATTACK = "zombie_attack";
+export type ZombieAttackEvent = { x: number; y: number };
+
+// Dev/test seams (NODE_ENV !== production), same trust class as MSG_DEV_TELEPORT.
+// Disabling spawning also removes live zombies; the explicit spawn exists
+// because greedy steering makes natural-spawn E2E targeting structurally
+// flaky (plan addendum 3).
+export const MSG_DEV_ZOMBIE_SPAWNING = "dev_zombie_spawning";
+export type DevZombieSpawningMessage = { enabled: boolean };
+
+export const MSG_DEV_SPAWN_ZOMBIE = "dev_spawn_zombie";
+export type DevSpawnZombieMessage = { x: number; y: number };

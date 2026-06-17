@@ -10,6 +10,7 @@ import {
   MSG_ACTIVE_RELOAD,
   MSG_DEV_TELEPORT,
   MSG_END_GAME,
+  MSG_DEV_ZOMBIE_SPAWNING,
   EVT_RELOAD_RESULT,
   EVT_LOG,
   EVT_SHOT,
@@ -39,6 +40,7 @@ async function startedGame() {
   // Swallow broadcasts the SDK would otherwise warn about.
   c1.onMessage("*", () => {});
   c2.onMessage("*", () => {});
+  c1.send(MSG_DEV_ZOMBIE_SPAWNING, { enabled: false }); // 4B: keep zombies out of PvP fixtures
   c1.send(MSG_START_GAME);
   await sleep(3300); // real 3 s countdown
   expect(room.state.phase).toBe("playing");

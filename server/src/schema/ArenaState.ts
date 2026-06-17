@@ -36,6 +36,19 @@ export class Bullet extends Schema {
   // shooter sessionId stays in room memory — kill credit is server business
 }
 
+export class Zombie extends Schema {
+  @type("number") x = 0;
+  @type("number") y = 0;
+  @type("number") vx = 0; // sign drives client flipX (art faces left); 0 = standing
+  // attack cooldown stays in room memory (zombieMeta) — server business
+}
+
+export class Pickup extends Schema {
+  @type("number") x = 0;
+  @type("number") y = 0;
+  @type("uint8") kind = 0; // PICKUP_KIND_HEALTH | PICKUP_KIND_SPEED
+}
+
 export class ArenaState extends Schema {
   @type("string") phase: Phase = "lobby";
   @type("number") countdownMs = 0;
@@ -43,4 +56,6 @@ export class ArenaState extends Schema {
   @type("string") winnerName = "";
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Bullet }) bullets = new MapSchema<Bullet>();
+  @type({ map: Zombie }) zombies = new MapSchema<Zombie>();
+  @type({ map: Pickup }) pickups = new MapSchema<Pickup>();
 }

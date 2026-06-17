@@ -37,6 +37,18 @@ export type BulletView = SchemaCallbacks & {
   spawnTick: number;
 };
 
+export type ZombieView = SchemaCallbacks & {
+  x: number;
+  y: number;
+  vx: number;
+};
+
+export type PickupView = SchemaCallbacks & {
+  x: number;
+  y: number;
+  kind: number;
+};
+
 export type SchemaMap<T> = {
   size: number;
   forEach(cb: (item: T, key: string) => void): void;
@@ -56,6 +68,8 @@ export type ArenaState = {
   winnerName: string;
   players: LobbyPlayers;
   bullets: SchemaMap<BulletView>;
+  zombies: SchemaMap<ZombieView>;
+  pickups: SchemaMap<PickupView>;
   // schema 2.x property listener — callable, returns a detach fn
   listen: (
     prop: "phase" | "countdownMs" | "winnerName" | "tick",

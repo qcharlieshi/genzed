@@ -31,6 +31,12 @@ async function fireAt(page: Page, x: number, y: number): Promise<void> {
   );
 }
 
+async function setZombieSpawning(page: Page, enabled: boolean): Promise<void> {
+  await page.evaluate((on) => {
+    (window as unknown as { __arena?: { setZombieSpawning(e: boolean): void } }).__arena?.setZombieSpawning(on);
+  }, enabled);
+}
+
 async function ownHp(page: Page): Promise<number> {
   return page.evaluate(() => {
     const hook = (window as unknown as { __arena?: { players(): Array<{ local: boolean; hp: number }> } }).__arena;
@@ -61,6 +67,7 @@ test("A shoots B: hp drops, slain feed line on both clients, killer levels up, v
   try {
     await hookReady(pageA);
     await hookReady(pageB);
+    await setZombieSpawning(pageA, false); // 4B: clears strays + stops the spawner
 
     // Deterministic LoS pair, verified against the wallCollision grid.
     await teleportTo(pageA, 384, 416);
